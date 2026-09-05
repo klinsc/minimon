@@ -1,0 +1,7 @@
+{
+  "uuid": "minimon@l.github",
+  "name": "minimon",
+  "description": "NZXT-CAM-style hardware + Claude Code usage monitor: live label in the top bar, full card in the dropdown. Data comes from minimon-daemon.py.",
+  "shell-version": ["46", "47", "48"],
+  "url": "https://github.com/klinsc/minimon"
+}

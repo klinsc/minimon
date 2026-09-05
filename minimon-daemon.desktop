@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=minimon-daemon
+Comment=Data engine for the minimon GNOME extension
+Exec=/usr/bin/python3 /path/to/minimon/minimon-daemon.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3

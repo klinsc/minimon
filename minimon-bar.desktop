@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=minimon-bar
+Comment=minimon readout in the GNOME top bar
+Exec=/usr/bin/python3 /path/to/minimon/minimon-bar.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3

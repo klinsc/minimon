@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=minimon
+Comment=CAM mini-mode style hardware monitor
+Exec=/usr/bin/python3 /path/to/minimon/minimon.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3

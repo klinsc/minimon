@@ -1,0 +1,62 @@
+.minimon-panel-label {
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.minimon-card {
+  min-width: 248px;
+  padding: 4px 8px;
+  spacing: 8px;
+}
+
+.minimon-host {
+  color: rgba(160, 160, 170, 0.85);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+}
+
+.minimon-name {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.minimon-sub {
+  color: rgba(160, 160, 170, 0.95);
+  font-size: 10px;
+  font-family: monospace;
+}
+
+.minimon-warm { color: #fbbf24; }
+.minimon-hot  { color: #f87171; }
+
+.minimon-big {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.minimon-foot {
+  color: rgba(160, 160, 170, 0.9);
+  font-size: 10px;
+  font-family: monospace;
+}
+
+.minimon-track {
+  background-color: rgba(128, 128, 140, 0.28);
+  border-radius: 3px;
+  height: 5px;
+  width: 232px;
+}
+
+.minimon-fill {
+  border-radius: 3px;
+  height: 5px;
+}
+
+.minimon-fill-cpu { background-color: #7c5cff; }
+.minimon-fill-gpu { background-color: #22d3ee; }
+.minimon-fill-ram { background-color: #34d399; }
+.minimon-fill-u0  { background-color: #e879f9; }
+.minimon-fill-u1  { background-color: #fb923c; }
+.minimon-fill-u2  { background-color: #f87171; }
