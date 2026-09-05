@@ -42,7 +42,7 @@ class ClaudeFeed:
                 if api:
                     rows = [(k, lbl, pct, mm.reset_text(rst))
                             for k, lbl, pct, rst in mm.usage_rows(api)]
-                delay = 30 if (err and not self.rows) else (300 if err else 120)
+                delay = 30 if (err and not self.rows) else (300 if err else 180)
                 next_api = time.time() + delay
             with self.lock:
                 if today is not None:

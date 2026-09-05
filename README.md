@@ -1,7 +1,14 @@
 # minimon
 
-An NZXT CAM "mini mode" style hardware + Claude Code usage monitor for Linux,
-in two interchangeable forms:
+An NZXT CAM "mini mode" style hardware + Claude Code usage monitor, for Linux
+(GTK) and Windows 11 (tkinter). Shows CPU/GPU/RAM load and temps, network,
+and your Claude Code rate-limit windows (session / week / per-model week) with
+a local per-day call and token tally.
+
+**Windows 11 users:** see [Windows](#windows-11) below — grab
+`minimon-win-x64.exe` from the [latest release](../../releases/latest).
+
+The Linux side comes in two interchangeable forms:
 
 - **minimon.py** — floating always-on-top card (pure GTK3 + `/proc` + `/sys`)
 - **extension/minimon@klinsc.github + minimon-daemon.py** — GNOME Shell extension
@@ -25,7 +32,43 @@ in two interchangeable forms:
 
 ![floating card](docs/screenshot.png)
 
-## Run
+## Windows 11
+
+`minimon-win.pyw` is a self-contained floating card (tkinter + ctypes, no
+third-party Python packages) that mirrors the Linux card: CPU/GPU/RAM bars with
+warm/hot temp coloring, a GHz · W · SSD footer, network rates, and the Claude
+Session / Week / Week·Fable bars plus today's tally.
+
+![Windows card](docs/screenshot-windows.png)
+
+**Install (packaged exe):**
+
+1. Download `minimon-win-x64.exe` from the [latest release](../../releases/latest).
+2. Run it, or drop it next to `install-win.ps1` and run
+   `powershell -ExecutionPolicy Bypass -File install-win.ps1` to add a Startup
+   shortcut and an hourly Claude-token-refresh task. `-Uninstall` reverses it.
+
+**Run from source:** `pythonw minimon-win.pyw` (any Windows Python 3.10+;
+tkinter ships with it). `--demo` renders with synthetic data on any OS.
+
+**Where the numbers come from:**
+
+- CPU load, RAM, network — Win32 (`GetSystemTimes`, `GlobalMemoryStatusEx`,
+  `GetIfTable2`), no dependencies.
+- Temperatures, GPU load/power, clocks —
+  [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
+  Run it (ideally as admin) with **Options → Remote Web Server** on (port 8085);
+  minimon reads its JSON, and falls back to LHM's WMI namespace. Without LHM the
+  card still shows CPU/RAM/net and Claude usage, and notes `no LHM`.
+- Claude usage — the same `~/.claude` files the CLI uses. Point elsewhere with
+  the `MINIMON_CRED_FILE` / `MINIMON_PROJECTS` environment variables.
+
+The x64 exe is built by [GitHub Actions](.github/workflows/build-windows.yml)
+(PyInstaller on a Windows runner); push a `v*` tag to cut a release, or build
+locally with `pyinstaller --onefile --windowed --name minimon-win-x64
+--hidden-import minimon_core minimon-win.pyw`.
+
+## Run (Linux)
 
     python3 minimon-daemon.py  # data engine for the extension (autostarts)
     python3 minimon-bar.py     # appindicator alternative

@@ -122,7 +122,7 @@ class Bar:
                 if err and not have_rows:
                     delay = 30
                 else:
-                    delay = 300 if err else 120
+                    delay = 300 if err else 180
                 if api:
                     have_rows = True
                 next_api = time.time() + delay
