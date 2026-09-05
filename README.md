@@ -4,7 +4,7 @@ An NZXT CAM "mini mode" style hardware + Claude Code usage monitor for Linux,
 in two interchangeable forms:
 
 - **minimon.py** — floating always-on-top card (pure GTK3 + `/proc` + `/sys`)
-- **extension/minimon@l.github + minimon-daemon.py** — GNOME Shell extension
+- **extension/minimon@klinsc.github + minimon-daemon.py** — GNOME Shell extension
   (the autostarting default): compact live label in the top bar
   (`C4% 55° · G2% 45° · M48% · S9% W37% F38%` — CPU %/temp, GPU %/temp,
   RAM % (+temp when a DIMM sensor exists), and Claude quotas: S = session,
@@ -105,7 +105,7 @@ Installed at `~/.config/autostart/minimon-daemon.desktop` (extension data
 engine, 3 s session delay). To disable:
 
     rm ~/.config/autostart/minimon-daemon.desktop
-    gnome-extensions disable minimon@l.github
+    gnome-extensions disable minimon@klinsc.github
 
 Only one widget can ever run: the process holds an abstract-namespace socket
 lock, so a duplicate launch prints "minimon is already running" and exits.
