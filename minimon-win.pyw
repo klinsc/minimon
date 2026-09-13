@@ -197,6 +197,15 @@ class WinSensors:
         except ValueError:
             return None
 
+    def _temp(self, *needles, reject=()):
+        """Pick a temperature. Both LHM modes spell the kind into the key -
+        "... / Temperatures / CPU Package" over HTTP, "CPU Package
+        [Temperature]" over WMI - so requiring it keeps clocks, wattages and
+        voltages out of a reading that is about to be printed with a degree
+        sign."""
+        return self._lhm_pick("temperature", *needles,
+                              reject=("distance", "tjmax") + tuple(reject))
+
     def _lhm_pick(self, want_type, *needles, reject=()):
         best = None
         for name, value in self._lhm.items():
@@ -212,18 +221,27 @@ class WinSensors:
         return best
 
     def refresh_lhm(self):
+        """Poll whichever source works, re-probing both once a minute while
+        neither does. A source that answers with no sensors counts as a
+        failure: the WMI probe exits cleanly with an empty list when LHM is
+        simply not running, and treating that as success would pin the mode
+        to WMI and never look at the web server again - which is what
+        happened when LibreHardwareMonitor was started after minimon."""
         if self._lhm_mode == "none" and time.time() - self._lhm_ts < 60:
             return
         for mode, fn in (("http", self._lhm_http), ("wmi", self._lhm_wmi)):
             if self._lhm_mode not in (None, "none", mode):
                 continue
             try:
-                self._lhm = fn()
-                self._lhm_mode = mode
-                self._lhm_ts = time.time()
-                return
+                sensors = fn()
             except Exception:
                 continue
+            if not sensors:
+                continue
+            self._lhm = sensors
+            self._lhm_mode = mode
+            self._lhm_ts = time.time()
+            return
         self._lhm_mode = "none"
         self._lhm_ts = time.time()
         self._lhm = {}
@@ -232,26 +250,29 @@ class WinSensors:
     def read_all(self, dt):
         used, total = self.mem()
         rx, tx = self.net(dt)
-        http = self._lhm_mode == "http"
-        cpu_t = (self._lhm_pick("temperature", "cpu", reject=("distance",))
-                 if not http else
-                 self._lhm_pick("", "cpu", "temperature", reject=("distance",))
-                 ) if self._lhm else None
-        gpu_t = self._lhm_pick("", "gpu", "core") if self._lhm else None
         return {
             "cpu": self.cpu_percent(),
-            "cpu_t": self._lhm_pick("", "cpu", "tctl") or
-            self._lhm_pick("", "cpu", "package") or cpu_t,
-            "ghz": (self._lhm_pick("", "cpu", "clock", reject=("bus",)) or 0)
+            # Tctl on AMD, CPU Package on Intel, hottest core as a last resort
+            # (Intel calls the node "13th Gen Intel Core ...", so "core"
+            # matches the CPU's own name as well as its per-core sensors).
+            "cpu_t": self._temp("cpu", "tctl") or self._temp("cpu", "package")
+            or self._temp("cpu") or self._temp("core", reject=("gpu",)),
+            "ghz": (self._lhm_pick("clock", "cpu", reject=("bus",)) or
+                    self._lhm_pick("clock", "core",
+                                   reject=("bus", "gpu", "memory")) or 0)
             / 1000 or None,
-            "gpu": self._lhm_pick("", "gpu", "core", "load")
+            "gpu": self._lhm_pick("load", "gpu", "core")
             or self._lhm_pick("", "gpu", "d3d", "3d") or 0.0,
-            "gpu_t": gpu_t if gpu_t and gpu_t > 5 else None,
-            "gpu_w": self._lhm_pick("", "gpu", "power"),
+            "gpu_t": self._temp("gpu", "core")
+            or self._temp("gpu", reject=("hot spot", "junction", "memory")),
+            "gpu_w": self._lhm_pick("power", "gpu"),
             "vram": None,
             "ram": (used, total),
-            "ram_t": self._lhm_pick("", "memory", "temperature"),
-            "disk_t": self._lhm_pick("", "temperature", reject=("cpu", "gpu", "memory", "distance")) if self._lhm_mode == "wmi" else None,
+            # the DIMM sensor, not the GPU's memory junction
+            "ram_t": self._temp("memory", reject=("gpu", "junction", "vram")),
+            "disk_t": self._temp("composite") or self._temp(
+                reject=("cpu", "core", "gpu", "memory", "warning", "critical",
+                        "battery", "ambient", "system", "chipset")),
             "net": (rx, tx),
             "lhm": self._lhm_mode or "none",
         }
