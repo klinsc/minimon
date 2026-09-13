@@ -6,7 +6,9 @@ and your Claude Code rate-limit windows (session / week / per-model week) with
 a local per-day call and token tally.
 
 **Windows 11 users:** see [Windows](#windows-11) below — grab
-`minimon-win-x64.exe` from the [latest release](../../releases/latest).
+`minimon-win-x64.exe` from the [latest release](../../releases/latest). It
+lives in the taskbar corner (system tray) next to the Wi-Fi, volume and
+battery icons, with the floating card one click away.
 
 The Linux side comes in two interchangeable forms:
 
@@ -40,6 +42,30 @@ warm/hot temp coloring, a GHz · W · SSD footer, network rates, and the Claude
 Session / Week / Week·Fable bars plus today's tally.
 
 ![Windows card](docs/screenshot-windows.png)
+
+**System tray.** minimon sits in the taskbar's notification area like the
+Wi-Fi, volume and battery icons. The icon is a live miniature of the card —
+CPU, GPU, RAM and Claude-session meters (a meter turns red when that part is
+at 85 °C or hotter, or the session is at 90 % or more) — and hovering it
+shows the numbers:
+
+![Windows tray icon](docs/screenshot-tray-win.png)
+
+- **Left-click** (or Enter/Space on the icon) toggles the floating card;
+  `✕`, `Esc` and Alt+F4 hide the card into the tray instead of quitting.
+- **Right-click** opens the menu: Show/Hide card, Snap top-right,
+  *Always show icon in taskbar*, Quit.
+- Windows 11 normally hides new icons behind the `^` overflow; on its first
+  run minimon pins itself into the always-visible corner. That is the
+  *Always show icon in taskbar* toggle, the same switch as Settings ›
+  Personalization › Taskbar › Other system tray icons, and minimon only
+  flips it once per executable, so a later choice of yours sticks.
+- Launching the exe while it is already running just brings the card back.
+- `--hidden` starts with only the tray icon; `--no-tray` gives the plain
+  floating card of old (`✕` quits).
+
+The tray is plain `Shell_NotifyIcon` through ctypes — still no third-party
+packages.
 
 **Install (packaged exe):**
 
@@ -80,7 +106,7 @@ locally with `pyinstaller --onefile --windowed --name minimon-win-x64
 |---|---|
 | Left-drag anywhere | move the widget (position is remembered) |
 | Right-click | menu: snap top-right / bottom-right / quit |
-| `✕`, `Esc` or `q` | quit |
+| `✕`, `Esc` or `q` | quit (Windows: hides the card into the tray; Quit is in the menu) |
 
 ## Options
 
