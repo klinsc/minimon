@@ -7,10 +7,17 @@ from LibreHardwareMonitor when it is running (Options -> Remote Web Server,
 default port 8085; falls back to LHM's WMI namespace). Claude Code usage
 comes from minimon_core, reading the same files the CLI uses.
 
+It lives in the taskbar's notification area next to the Wi-Fi, volume and
+battery icons: the tray icon is a live miniature of the card (CPU, GPU, RAM
+and Claude-session meters), hovering it shows the numbers, a left-click
+toggles the floating card and a right-click opens the menu. That is plain
+Shell_NotifyIcon through ctypes - still no third-party packages.
+
 Run with pythonw minimon-win.pyw (or the packaged minimon-win-x64.exe).
 --demo renders with synthetic sensor data on any OS.
 """
 import argparse
+import collections
 import ctypes
 import json
 import os
@@ -18,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 import tkinter.font as tkfont
 import urllib.request
@@ -270,6 +278,382 @@ class DemoSensors:
                 "lhm": "demo"}
 
 
+# -------------------------------------------------------------- tray icon --
+def _rgb(hexcolor):
+    return tuple(int(hexcolor[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def tray_pixels(size, bars):
+    """Draw the tray glyph: the card in miniature - a dark rounded tile with
+    one horizontal meter per (fraction, "#rrggbb") in `bars`.
+
+    Returns top-down BGRA bytes for a size x size 32-bit DIB. Alpha is
+    straight (not premultiplied), which is what CreateIconIndirect expects;
+    only the round corners are partially transparent."""
+    s = size
+    buf = bytearray(s * s * 4)
+
+    def put(x, y, rgb, a=255):
+        i = (y * s + x) * 4
+        buf[i], buf[i + 1], buf[i + 2], buf[i + 3] = rgb[2], rgb[1], rgb[0], a
+
+    r = max(2, round(s / 4))
+    bg = _rgb(BG)
+    for y in range(s):
+        for x in range(s):
+            # corner pixels get 4x4-supersampled coverage of the round corner
+            cx = r if x < r else s - r if x >= s - r else None
+            cy = r if y < r else s - r if y >= s - r else None
+            if cx is None or cy is None:
+                put(x, y, bg)
+                continue
+            inside = 0
+            for j in range(4):
+                for i in range(4):
+                    dx = x + (i + 0.5) / 4 - cx
+                    dy = y + (j + 0.5) / 4 - cy
+                    if dx * dx + dy * dy <= r * r:
+                        inside += 1
+            if inside:
+                put(x, y, bg, inside * 255 // 16)
+
+    n = len(bars)
+    gap = max(1, s // 16)
+    margin = max(2, s // 8)
+    h = max(1, (s - 2 * margin - (n - 1) * gap) // n)
+    top = (s - (n * h + (n - 1) * gap)) // 2
+    x0, x1 = margin, s - margin
+    track = _rgb(TRACK)
+    for i, (frac, color) in enumerate(bars):
+        fill = 0 if frac <= 0 else max(1, round((x1 - x0) * min(1.0, frac)))
+        rgb = _rgb(color)
+        y0 = top + i * (h + gap)
+        for y in range(y0, y0 + h):
+            for x in range(x0, x1):
+                put(x, y, rgb if x < x0 + fill else track)
+    return buf
+
+
+if IS_WIN:
+    import winreg
+    from ctypes import wintypes
+
+    # Private DLL handles so our argtypes never leak into ctypes.windll users.
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+                                 wintypes.WPARAM, wintypes.LPARAM)
+
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
+                    ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                    ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                    ("hCursor", wintypes.HANDLE),
+                    ("hbrBackground", wintypes.HBRUSH),
+                    ("lpszMenuName", wintypes.LPCWSTR),
+                    ("lpszClassName", wintypes.LPCWSTR)]
+
+    class NOTIFYICONDATAW(ctypes.Structure):    # Vista+ layout (976 bytes x64)
+        _fields_ = [("cbSize", wintypes.DWORD), ("hWnd", wintypes.HWND),
+                    ("uID", wintypes.UINT), ("uFlags", wintypes.UINT),
+                    ("uCallbackMessage", wintypes.UINT),
+                    ("hIcon", wintypes.HICON), ("szTip", wintypes.WCHAR * 128),
+                    ("dwState", wintypes.DWORD), ("dwStateMask", wintypes.DWORD),
+                    ("szInfo", wintypes.WCHAR * 256), ("uVersion", wintypes.UINT),
+                    ("szInfoTitle", wintypes.WCHAR * 64),
+                    ("dwInfoFlags", wintypes.DWORD),
+                    ("guidItem", ctypes.c_byte * 16),
+                    ("hBalloonIcon", wintypes.HICON)]
+
+    class ICONINFO(ctypes.Structure):
+        _fields_ = [("fIcon", wintypes.BOOL), ("xHotspot", wintypes.DWORD),
+                    ("yHotspot", wintypes.DWORD), ("hbmMask", wintypes.HBITMAP),
+                    ("hbmColor", wintypes.HBITMAP)]
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD),
+                    ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD),
+                    ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG),
+                    ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD)]
+
+    def _proto(fn, restype, *argtypes):
+        fn.restype, fn.argtypes = restype, argtypes
+
+    _proto(_user32.DefWindowProcW, ctypes.c_ssize_t, wintypes.HWND,
+           wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    _proto(_user32.RegisterClassW, wintypes.ATOM, ctypes.POINTER(WNDCLASSW))
+    _proto(_user32.CreateWindowExW, wintypes.HWND, wintypes.DWORD,
+           wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int,
+           ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND,
+           wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID)
+    _proto(_user32.DestroyWindow, wintypes.BOOL, wintypes.HWND)
+    _proto(_user32.PostMessageW, wintypes.BOOL, wintypes.HWND, wintypes.UINT,
+           wintypes.WPARAM, wintypes.LPARAM)
+    _proto(_user32.SetForegroundWindow, wintypes.BOOL, wintypes.HWND)
+    _proto(_user32.FindWindowW, wintypes.HWND, wintypes.LPCWSTR,
+           wintypes.LPCWSTR)
+    _proto(_user32.RegisterWindowMessageW, wintypes.UINT, wintypes.LPCWSTR)
+    _proto(_user32.GetSystemMetrics, ctypes.c_int, ctypes.c_int)
+    _proto(_user32.CreateIconIndirect, wintypes.HICON, ctypes.POINTER(ICONINFO))
+    _proto(_user32.DestroyIcon, wintypes.BOOL, wintypes.HICON)
+    _proto(_gdi32.CreateDIBSection, wintypes.HBITMAP, wintypes.HDC,
+           ctypes.POINTER(BITMAPINFOHEADER), wintypes.UINT,
+           ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD)
+    _proto(_gdi32.CreateBitmap, wintypes.HBITMAP, ctypes.c_int, ctypes.c_int,
+           wintypes.UINT, wintypes.UINT, ctypes.c_void_p)
+    _proto(_gdi32.DeleteObject, wintypes.BOOL, wintypes.HGDIOBJ)
+    _proto(_shell32.Shell_NotifyIconW, wintypes.BOOL, wintypes.DWORD,
+           ctypes.POINTER(NOTIFYICONDATAW))
+    _proto(_kernel32.GetModuleHandleW, wintypes.HMODULE, wintypes.LPCWSTR)
+
+    WM_NULL, WM_CLOSE, WM_CONTEXTMENU, WM_APP = 0x0000, 0x0010, 0x007B, 0x8000
+    WM_LBUTTONUP, WM_LBUTTONDBLCLK = 0x0202, 0x0203
+    NIN_SELECT, NIN_KEYSELECT = 0x0400, 0x0401
+    NIM_ADD, NIM_MODIFY, NIM_DELETE, NIM_SETVERSION = 0, 1, 2, 4
+    NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_SHOWTIP = 0x01, 0x02, 0x04, 0x80
+    NOTIFYICON_VERSION_4 = 4
+    SM_CXSMICON = 49
+
+    def make_icon(size, pixels):
+        """HICON (caller DestroyIcon()s it) from top-down BGRA bytes, or None."""
+        bih = BITMAPINFOHEADER(biSize=ctypes.sizeof(BITMAPINFOHEADER),
+                               biWidth=size, biHeight=-size, biPlanes=1,
+                               biBitCount=32)
+        bits = ctypes.c_void_p()
+        color = _gdi32.CreateDIBSection(None, ctypes.byref(bih), 0,
+                                        ctypes.byref(bits), None, 0)
+        if not color:
+            return None
+        ctypes.memmove(bits, bytes(pixels), len(pixels))
+        stride = (size + 15) // 16 * 2          # 1-bpp rows are WORD aligned
+        mask = bytearray(stride * size)         # bit set = transparent
+        for y in range(size):
+            for x in range(size):
+                if not pixels[(y * size + x) * 4 + 3]:
+                    mask[y * stride + x // 8] |= 0x80 >> (x % 8)
+        hmask = _gdi32.CreateBitmap(size, size, 1, 1, bytes(mask))
+        info = ICONINFO(True, 0, 0, hmask, color)
+        icon = _user32.CreateIconIndirect(ctypes.byref(info))
+        _gdi32.DeleteObject(hmask)
+        _gdi32.DeleteObject(color)
+        return icon
+
+    class TrayIcon:
+        """The notification-area icon plus the hidden window that owns it.
+
+        The window lives on the tkinter thread, so Tk's event loop pumps its
+        messages and nothing else is needed. The WNDPROC must not call into
+        Tk though: a ctypes callback runs while _tkinter has the Tcl thread
+        state parked, and a nested Tk call from there clears that state, so
+        the next Tk->Python callback dies with "PyEval_RestoreThread ...
+        thread state is NULL". The WNDPROC therefore only queues events and a
+        Tk timer (_poll) runs them on the Tk side a few ms later.
+        """
+        CLASS = "minimon-tray"
+        UID = 0x6D69                     # stable icon id ("mi")
+        MSG_NOTIFY = WM_APP + 1          # icon events arrive here
+        MSG_SHOW = WM_APP + 2            # a second launch posts this to us
+        POLL_MS = 40
+        SETTINGS = r"Control Panel\NotifyIconSettings"   # Win11 per-icon prefs
+
+        def __init__(self, root, on_toggle, on_menu, on_show, on_quit):
+            self.root = root
+            self.on_toggle, self.on_menu = on_toggle, on_menu
+            self.on_show, self.on_quit = on_show, on_quit
+            # Everything _wndproc may touch is set before CreateWindowExW,
+            # which already delivers WM_NCCREATE and friends to it.
+            self._pending = collections.deque()
+            self._icon = None
+            self._added = False
+            self._retry_at = 0.0
+            self._last_toggle = 0.0
+            self._dblclk_at = 0.0
+            self._taskbar_created = _user32.RegisterWindowMessageW(
+                "TaskbarCreated")
+            self._proc = WNDPROC(self._wndproc)      # must outlive the window
+            hinst = _kernel32.GetModuleHandleW(None)
+            wc = WNDCLASSW(lpfnWndProc=self._proc, hInstance=hinst,
+                           lpszClassName=self.CLASS)
+            if not _user32.RegisterClassW(ctypes.byref(wc)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            self.hwnd = _user32.CreateWindowExW(
+                0, self.CLASS, "minimon", 0, 0, 0, 0, 0, None, None, hinst, None)
+            if not self.hwnd:
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:    # let a medium-IL explorer reach us even when we run elevated
+                _user32.ChangeWindowMessageFilterEx(
+                    self.hwnd, self._taskbar_created, 1, None)
+            except (AttributeError, OSError):
+                pass
+            self._nid = NOTIFYICONDATAW(cbSize=ctypes.sizeof(NOTIFYICONDATAW),
+                                        hWnd=self.hwnd, uID=self.UID,
+                                        uCallbackMessage=self.MSG_NOTIFY)
+            root.after(self.POLL_MS, self._poll)
+
+        # --- shell side ---
+        def update(self, bars, tip):
+            """Redraw the glyph from (fraction, color) bars and set the tooltip."""
+            size = max(16, _user32.GetSystemMetrics(SM_CXSMICON))
+            icon = make_icon(size, tray_pixels(size, bars))
+            if not icon:
+                return
+            old, self._icon = self._icon, icon
+            nid = self._nid
+            nid.hIcon = icon
+            if not self._added:
+                self._add()
+            if self._added:
+                nid.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP
+                nid.szTip = tip[:127]
+                if not _shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid)):
+                    self._added = False      # explorer went away; re-add later
+            if old:
+                _user32.DestroyIcon(old)     # the shell keeps its own copy
+
+        def _add(self):
+            now = time.monotonic()
+            if now < self._retry_at:
+                return
+            self._retry_at = now + 5.0   # Shell_NotifyIcon blocks ~4 s if the shell hangs
+            nid = self._nid
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP
+            nid.szTip = "minimon"        # what Settings > Taskbar lists us as
+            if _shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
+                nid.uVersion = NOTIFYICON_VERSION_4
+                _shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(nid))
+                self._added = True
+            elif _shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid)):
+                self._added = True       # still registered (spurious TaskbarCreated)
+
+        def remove(self):
+            if self._added:
+                _shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._nid))
+                self._added = False
+            if self._icon:
+                _user32.DestroyIcon(self._icon)
+                self._icon = None
+            if self.hwnd:
+                _user32.DestroyWindow(self.hwnd)
+                self.hwnd = None
+
+        # --- window side (no Tk calls in here, see the class docstring) ---
+        def _wndproc(self, hwnd, msg, wparam, lparam):
+            try:
+                if msg == self.MSG_NOTIFY:
+                    self._event(lparam & 0xFFFF, wparam)
+                    return 0
+                if msg == self.MSG_SHOW:
+                    self._pending.append(("show", None))
+                    return 0
+                if msg == self._taskbar_created:     # explorer restarted
+                    self._added, self._retry_at = False, 0.0
+                    self._add()
+                    return 0
+                if msg == WM_CLOSE:                  # e.g. a polite taskkill
+                    self._pending.append(("quit", None))
+                    return 0
+            except Exception:       # never unwind into the message loop
+                if sys.stderr:      # pythonw has none; a console/log does
+                    traceback.print_exc()
+            return _user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        def _event(self, ev, wparam):
+            now = time.monotonic()
+            if ev == WM_LBUTTONDBLCLK:
+                self._dblclk_at = now    # its first click already toggled
+            elif ev in (WM_LBUTTONUP, NIN_SELECT, NIN_KEYSELECT):
+                if ev == WM_LBUTTONUP and now - self._dblclk_at < 0.5:
+                    return
+                if now - self._last_toggle > 0.3:   # NIN_* echoes of one click
+                    self._last_toggle = now
+                    self._pending.append(("toggle", None))
+            elif ev == WM_CONTEXTMENU:   # right-click or Shift+F10 on the icon
+                x = ctypes.c_short(wparam & 0xFFFF).value
+                y = ctypes.c_short((wparam >> 16) & 0xFFFF).value
+                self._pending.append(("menu", (x, y)))
+
+        # --- Tk side ---
+        def _poll(self):
+            """Tk timer: run the queued icon events. Not re-entrant - while a
+            popup menu is open the next poll simply is not scheduled yet."""
+            while self._pending:
+                kind, arg = self._pending.popleft()
+                if kind == "toggle":
+                    self.on_toggle()
+                elif kind == "show":
+                    self.on_show()
+                elif kind == "menu":
+                    _user32.SetForegroundWindow(self.hwnd)  # closes on outside click
+                    self.on_menu(*arg)
+                    if self.hwnd:
+                        _user32.PostMessageW(self.hwnd, WM_NULL, 0, 0)
+                elif kind == "quit":
+                    self.on_quit()
+            if self.hwnd:                # cleared by remove() on shutdown
+                self.root.after(self.POLL_MS, self._poll)
+
+        # --- Windows 11 "show in the taskbar corner" (vs. the ^ overflow) ---
+        def _settings_key(self):
+            """Explorer's per-icon settings key for us, once it exists (it is
+            created shortly after the first NIM_ADD)."""
+            exe = os.path.basename(sys.executable).lower()
+            try:
+                root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.SETTINGS)
+            except OSError:
+                return None
+            with root:
+                for i in range(4096):
+                    try:
+                        name = winreg.EnumKey(root, i)
+                    except OSError:
+                        return None
+                    try:
+                        with winreg.OpenKey(root, name) as k:
+                            path = winreg.QueryValueEx(k, "ExecutablePath")[0]
+                            uid = winreg.QueryValueEx(k, "UID")[0]
+                    except OSError:
+                        continue
+                    if (uid == self.UID and
+                            os.path.basename(str(path)).lower() == exe):
+                        return self.SETTINGS + "\\" + name
+            return None
+
+        def pinned(self):
+            """True/False = shown in the corner / hidden behind the overflow;
+            None = the shell has no entry for us yet."""
+            key = self._settings_key()
+            if not key:
+                return None
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                    return bool(winreg.QueryValueEx(k, "IsPromoted")[0])
+            except OSError:
+                return False
+
+        def pin(self, show=True):
+            """Move the icon into the always-visible corner (or back into the
+            overflow). Explorer applies it live. False = no entry yet."""
+            key = self._settings_key()
+            if not key:
+                return False
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0,
+                                    winreg.KEY_SET_VALUE) as k:
+                    winreg.SetValueEx(k, "IsPromoted", 0, winreg.REG_DWORD,
+                                      1 if show else 0)
+                return True
+            except OSError:
+                return False
+
+
 # ------------------------------------------------------------------- UI ----
 class Card:
     def __init__(self, args):
@@ -279,6 +663,9 @@ class Card:
         self.claude_err = None
         self.today = {"calls": 0, "out": 0}
         self.stop = threading.Event()
+        self.cfg = {}
+        self.hidden = False
+        self.tray = None
 
         self.root = tk.Tk()
         self.root.title("minimon")
@@ -310,12 +697,24 @@ class Card:
         self.canvas.pack()
         self.canvas.bind("<ButtonPress-1>", self._drag_start)
         self.canvas.bind("<B1-Motion>", self._drag_move)
+        self.canvas.bind("<ButtonRelease-1>", lambda *_: self._save_cfg())
         self.canvas.bind("<ButtonPress-3>", self._menu)
-        self.root.bind("<Escape>", lambda *_: self.quit())
-        self.root.protocol("WM_DELETE_WINDOW", self.quit)
-
+        self.root.bind("<Escape>", lambda *_: self.close())
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self._place()
+        if IS_WIN and not args.no_tray:
+            try:
+                self.tray = TrayIcon(self.root, on_toggle=self.toggle,
+                                     on_menu=self._tray_menu, on_show=self.show,
+                                     on_quit=self.quit)
+            except OSError:
+                self.tray = None
+        if self.tray:
+            if args.hidden:
+                self.hide()
+            self.root.after(2000, self._pin_once)
+
         self._last = time.monotonic()
         threading.Thread(target=self._claude_worker, daemon=True).start()
         threading.Thread(target=self._lhm_worker, daemon=True).start()
@@ -324,40 +723,110 @@ class Card:
     # --- window plumbing ---
     def _place(self):
         try:
-            cfg = json.load(open(CONFIG))
-            self.root.geometry("+%d+%d" % (cfg["x"], cfg["y"]))
-        except (OSError, ValueError, KeyError):
+            self.cfg = json.load(open(CONFIG))
+            if not isinstance(self.cfg, dict):
+                self.cfg = {}
+        except (OSError, ValueError):
+            self.cfg = {}
+        try:
+            self.pos = (int(self.cfg["x"]), int(self.cfg["y"]))
+        except (KeyError, TypeError, ValueError):
             self.root.update_idletasks()
-            sw = self.root.winfo_screenwidth()
-            self.root.geometry("+%d+%d" % (sw - self.W - 24, 24))
+            self.pos = (self.root.winfo_screenwidth() - self.W - 24, 24)
+        self.root.geometry("+%d+%d" % self.pos)
+
+    def _save_cfg(self):
+        self.cfg["x"], self.cfg["y"] = self.pos
+        try:
+            os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+            with open(CONFIG, "w") as fh:
+                json.dump(self.cfg, fh)
+        except OSError:
+            pass
 
     def _drag_start(self, ev):
         self._dx, self._dy = ev.x, ev.y
 
     def _drag_move(self, ev):
-        self.root.geometry("+%d+%d" % (ev.x_root - self._dx,
-                                       ev.y_root - self._dy))
-
-    def _menu(self, ev):
-        m = tk.Menu(self.root, tearoff=0, bg="#1b1d23", fg="#e8e8ea",
-                    activebackground="#7c5cff")
-        m.add_command(label="Snap top-right", command=self._snap_tr)
-        m.add_separator()
-        m.add_command(label="Quit", command=self.quit)
-        m.tk_popup(ev.x_root, ev.y_root)
+        self.pos = (ev.x_root - self._dx, ev.y_root - self._dy)
+        self.root.geometry("+%d+%d" % self.pos)
 
     def _snap_tr(self):
-        sw = self.root.winfo_screenwidth()
-        self.root.geometry("+%d+%d" % (sw - self.W - 24, 24))
+        self.pos = (self.root.winfo_screenwidth() - self.W - 24, 24)
+        self.root.geometry("+%d+%d" % self.pos)
+        self.show()
+        self._save_cfg()
+
+    def show(self):
+        self.root.deiconify()
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        self.hidden = False
+
+    def hide(self):
+        self.root.withdraw()
+        self.hidden = True
+
+    def toggle(self):
+        if self.hidden:
+            self.show()
+        else:
+            self.hide()
+
+    def close(self):
+        """The card's close gesture: into the tray when we have one, else quit."""
+        if self.tray:
+            self.hide()
+        else:
+            self.quit()
+
+    def _build_menu(self):
+        m = tk.Menu(self.root, tearoff=0, bg="#1b1d23", fg="#e8e8ea",
+                    activebackground="#7c5cff", selectcolor="#e8e8ea")
+        if self.tray:
+            m.add_command(label="Show card" if self.hidden else "Hide card",
+                          command=self.toggle)
+        m.add_command(label="Snap top-right", command=self._snap_tr)
+        if self.tray:
+            pinned = self.tray.pinned()
+            if pinned is not None:
+                self._pin_var = tk.BooleanVar(self.root, value=pinned)
+                m.add_checkbutton(label="Always show icon in taskbar",
+                                  variable=self._pin_var,
+                                  command=lambda: self.tray.pin(self._pin_var.get()))
+        m.add_separator()
+        m.add_command(label="Quit", command=self.quit)
+        return m
+
+    def _menu(self, ev):
+        self._build_menu().tk_popup(ev.x_root, ev.y_root)
+
+    def _tray_menu(self, x, y):
+        self._build_menu().tk_popup(x, y)
+
+    def _pin_once(self, tries=0):
+        """First run only: put the icon in the always-visible taskbar corner
+        (Windows 11 hides new icons behind the ^ overflow by default). Noted
+        per executable so a later choice in Settings or the menu sticks."""
+        done = self.cfg.get("tray_pinned")
+        if not isinstance(done, dict):
+            done = self.cfg["tray_pinned"] = {}
+        if done.get(sys.executable) or not self.tray:
+            return
+        if self.tray.pin(True):
+            done[sys.executable] = True
+            self._save_cfg()
+        elif tries < 10:     # explorer writes its entry a moment after NIM_ADD
+            self.root.after(3000, lambda: self._pin_once(tries + 1))
 
     def quit(self):
+        if self.stop.is_set():
+            return
         self.stop.set()
-        try:
-            os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-            json.dump({"x": self.root.winfo_x(), "y": self.root.winfo_y()},
-                      open(CONFIG, "w"))
-        except OSError:
-            pass
+        self._save_cfg()
+        if self.tray:
+            self.tray.remove()
+            self.tray = None
         self.root.destroy()
 
     # --- background feeds ---
@@ -385,6 +854,43 @@ class Card:
                     30 if (err and not self.claude_rows)
                     else (300 if err else 180))
             self.stop.wait(60)
+
+    # --- tray feed ---
+    @staticmethod
+    def _session_pct(rows):
+        for key, _label, pct, _resets in rows:
+            if key.startswith("session") or key == "five_hour":
+                return pct
+        return None
+
+    def _tray_bars(self, d, rows):
+        used, total = d["ram"]
+        hot = lambda t: (t or 0) >= 85
+        s = self._session_pct(rows) or 0
+        return [(d["cpu"] / 100, HOT if hot(d["cpu_t"]) else COLORS["cpu"]),
+                (d["gpu"] / 100, HOT if hot(d["gpu_t"]) else COLORS["gpu"]),
+                (used / total, COLORS["ram"]),
+                (s / 100, HOT if s >= 90 else COLORS["u0"])]
+
+    def _tray_tip(self, d, rows):
+        used, total = d["ram"]
+        deg = lambda t: " %.0f°" % t if t else ""
+        hw = "CPU %.0f%%%s · GPU %.0f%%%s · RAM %.0f%%" % (
+            d["cpu"], deg(d["cpu_t"]), d["gpu"], deg(d["gpu_t"]),
+            100 * used / total)
+        if rows:
+            claude = " · ".join("%s %.0f%%" % (label, pct)
+                                for _k, label, pct, _r in rows)
+        else:
+            claude = "Claude: %s" % (self.claude_err or "…")
+        t = self.today
+        today = "today %s calls · %s tok" % (core.fmt_count(t.get("calls", 0)),
+                                             core.fmt_count(t.get("out", 0)))
+        lines = ["minimon", hw, claude, today]
+        extra = sum(len(s) for s in lines) + 3 - 127   # szTip holds 127 chars
+        if extra > 0:
+            lines[2] = claude[:max(0, len(claude) - extra - 1)] + "…"
+        return "\n".join(lines)[:127]
 
     # --- drawing ---
     def _rround(self, x0, y0, x1, y1, r, **kw):
@@ -417,8 +923,14 @@ class Card:
         now = time.monotonic()
         dt, self._last = now - self._last, now
         d = self.sensors.read_all(max(dt, 0.05))
-
         rows = list(self.claude_rows)
+        if self.tray:
+            self.tray.update(self._tray_bars(d, rows), self._tray_tip(d, rows))
+        if not self.hidden:
+            self._draw(d, rows)
+        self.root.after(int(self.args.interval * 1000), self.tick)
+
+    def _draw(self, d, rows):
         c = self.canvas
         c.delete("all")
 
@@ -427,7 +939,7 @@ class Card:
                       font=self.tiny)
         c.create_text(self.W - PAD, y - 2, text="✕", anchor="ne", fill=DIM,
                       font=self.sans, tags="close")
-        c.tag_bind("close", "<Button-1>", lambda *_: self.quit())
+        c.tag_bind("close", "<Button-1>", lambda *_: self.close())
         y += self.th + 8
 
         used, total = d["ram"]
@@ -486,13 +998,21 @@ class Card:
                           outline="#2c2d36")
         c.tag_lower(bg)
 
-        self.root.after(int(self.args.interval * 1000), self.tick)
-
     def run(self):
         self.root.mainloop()
 
 
 def main():
+    p = argparse.ArgumentParser(description="minimon for Windows")
+    p.add_argument("--interval", type=float, default=1.0)
+    p.add_argument("--demo", action="store_true",
+                   help="synthetic sensor data (any OS)")
+    p.add_argument("--no-tray", action="store_true",
+                   help="no notification-area icon; the card's close button quits")
+    p.add_argument("--hidden", action="store_true",
+                   help="start with the card hidden (tray icon only)")
+    args = p.parse_args()
+
     if IS_WIN:
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -501,14 +1021,13 @@ def main():
         mutex = ctypes.windll.kernel32.CreateMutexW(None, False,
                                                     "minimon-win-single")
         if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            # Already running: ask that instance to pop its card back up.
+            other = _user32.FindWindowW(TrayIcon.CLASS, None)
+            if other:
+                _user32.PostMessageW(other, TrayIcon.MSG_SHOW, 0, 0)
             return 0
         globals()["_mutex"] = mutex
 
-    p = argparse.ArgumentParser(description="minimon for Windows")
-    p.add_argument("--interval", type=float, default=1.0)
-    p.add_argument("--demo", action="store_true",
-                   help="synthetic sensor data (any OS)")
-    args = p.parse_args()
     Card(args).run()
     return 0
 
