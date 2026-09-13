@@ -7,8 +7,9 @@ a local per-day call and token tally.
 
 **Windows 11 users:** see [Windows](#windows-11) below — grab
 `minimon-win-x64.exe` from the [latest release](../../releases/latest). It
-lives in the taskbar corner (system tray) next to the Wi-Fi, volume and
-battery icons, with the floating card one click away.
+lives in the taskbar next to the Wi-Fi, volume and battery icons — the same
+live readout as the GNOME top bar plus a tray icon — with the floating card
+one click away.
 
 The Linux side comes in two interchangeable forms:
 
@@ -43,13 +44,26 @@ Session / Week / Week·Fable bars plus today's tally.
 
 ![Windows card](docs/screenshot-windows.png)
 
-**System tray.** minimon sits in the taskbar's notification area like the
-Wi-Fi, volume and battery icons. The icon is a live miniature of the card —
-CPU, GPU, RAM and Claude-session meters (a meter turns red when that part is
-at 85 °C or hotter, or the session is at 90 % or more) — and hovering it
-shows the numbers:
+**Taskbar.** minimon lives in the taskbar like the Wi-Fi, volume and battery
+icons, in two parts:
 
-![Windows tray icon](docs/screenshot-tray-win.png)
+![Windows taskbar readout and tray icon](docs/screenshot-tray-win.png)
+
+- **The readout** — the live label the GNOME extension puts in the top bar
+  (`C4% 55° · G2% 45° · M48% · S9% W37% F38%`), drawn just left of the
+  notification icons. The taskbar is twice as tall as the GNOME bar and its
+  clock is two lines, so the readout is stacked the same way: hardware on
+  top, Claude quotas underneath. `--format` takes one template per line,
+  built from `{cpu} {ct} {gpu} {gt} {mem} {mt} {cc} {claude}` (a single
+  template gives a single line); `--label-side left` moves it to the
+  taskbar's left end if the centered app icons still crowd it;
+  `--no-label` drops it.
+- **The tray icon** — a miniature of the card: CPU, GPU, RAM and
+  Claude-session meters (a meter turns red when that part is at 85 °C or
+  hotter, or the session is at 90 % or more), with the full numbers in its
+  tooltip.
+
+Both parts respond the same way:
 
 - **Left-click** (or Enter/Space on the icon) toggles the floating card;
   `✕`, `Esc` and Alt+F4 hide the card into the tray instead of quitting.
@@ -61,11 +75,14 @@ shows the numbers:
   Personalization › Taskbar › Other system tray icons, and minimon only
   flips it once per executable, so a later choice of yours sticks.
 - Launching the exe while it is already running just brings the card back.
-- `--hidden` starts with only the tray icon; `--no-tray` gives the plain
+- `--hidden` starts with the card hidden; `--no-tray` gives the plain
   floating card of old (`✕` quits).
 
-The tray is plain `Shell_NotifyIcon` through ctypes — still no third-party
-packages.
+All of it is plain Win32 through ctypes — still no third-party packages.
+The icon is `Shell_NotifyIcon`; the readout is a layered child window parked
+inside explorer's taskbar (the technique TrafficMonitor uses), because the
+taskbar has no text API of its own. Explorer forgets it on a restart, so
+minimon simply re-creates it.
 
 **Install (packaged exe):**
 
