@@ -7,11 +7,13 @@ from LibreHardwareMonitor when it is running (Options -> Remote Web Server,
 default port 8085; falls back to LHM's WMI namespace). Claude Code usage
 comes from minimon_core, reading the same files the CLI uses.
 
-It lives in the taskbar's notification area next to the Wi-Fi, volume and
-battery icons: the tray icon is a live miniature of the card (CPU, GPU, RAM
-and Claude-session meters), hovering it shows the numbers, a left-click
-toggles the floating card and a right-click opens the menu. That is plain
-Shell_NotifyIcon through ctypes - still no third-party packages.
+It lives in the taskbar next to the Wi-Fi, volume and battery icons: a live
+readout like the GNOME top-bar label (C4% 55° · G2% 45° · M48% · S9% W37%)
+sits just left of the notification icons, and the tray icon itself is a
+miniature of the card (CPU, GPU, RAM and Claude-session meters) with the
+numbers in its tooltip. Left-click either to toggle the floating card,
+right-click for the menu. All of it is plain Win32 through ctypes - still
+no third-party packages.
 
 Run with pythonw minimon-win.pyw (or the packaged minimon-win-x64.exe).
 --demo renders with synthetic sensor data on any OS.
@@ -384,6 +386,11 @@ if IS_WIN:
                     ("biClrUsed", wintypes.DWORD),
                     ("biClrImportant", wintypes.DWORD)]
 
+    class BLENDFUNCTION(ctypes.Structure):
+        _fields_ = [("BlendOp", ctypes.c_ubyte), ("BlendFlags", ctypes.c_ubyte),
+                    ("SourceConstantAlpha", ctypes.c_ubyte),
+                    ("AlphaFormat", ctypes.c_ubyte)]
+
     def _proto(fn, restype, *argtypes):
         fn.restype, fn.argtypes = restype, argtypes
 
@@ -413,6 +420,45 @@ if IS_WIN:
     _proto(_shell32.Shell_NotifyIconW, wintypes.BOOL, wintypes.DWORD,
            ctypes.POINTER(NOTIFYICONDATAW))
     _proto(_kernel32.GetModuleHandleW, wintypes.HMODULE, wintypes.LPCWSTR)
+    # taskbar readout
+    _proto(_user32.FindWindowExW, wintypes.HWND, wintypes.HWND, wintypes.HWND,
+           wintypes.LPCWSTR, wintypes.LPCWSTR)
+    _proto(_user32.GetWindowRect, wintypes.BOOL, wintypes.HWND,
+           ctypes.POINTER(wintypes.RECT))
+    _proto(_user32.ScreenToClient, wintypes.BOOL, wintypes.HWND,
+           ctypes.POINTER(wintypes.POINT))
+    _proto(_user32.SetWindowPos, wintypes.BOOL, wintypes.HWND, wintypes.HWND,
+           ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+           wintypes.UINT)
+    _proto(_user32.IsWindow, wintypes.BOOL, wintypes.HWND)
+    _proto(_user32.IsWindowVisible, wintypes.BOOL, wintypes.HWND)
+    _proto(_user32.GetWindow, wintypes.HWND, wintypes.HWND, wintypes.UINT)
+    _proto(_user32.GetCursorPos, wintypes.BOOL, ctypes.POINTER(wintypes.POINT))
+    _proto(_user32.LoadCursorW, wintypes.HANDLE, wintypes.HINSTANCE,
+           wintypes.LPVOID)
+    _proto(_user32.DrawTextW, ctypes.c_int, wintypes.HDC, wintypes.LPCWSTR,
+           ctypes.c_int, ctypes.POINTER(wintypes.RECT), wintypes.UINT)
+    _proto(_user32.UpdateLayeredWindow, wintypes.BOOL, wintypes.HWND,
+           wintypes.HDC, ctypes.POINTER(wintypes.POINT),
+           ctypes.POINTER(wintypes.SIZE), wintypes.HDC,
+           ctypes.POINTER(wintypes.POINT), wintypes.COLORREF,
+           ctypes.POINTER(BLENDFUNCTION), wintypes.DWORD)
+    try:
+        _proto(_user32.GetDpiForWindow, wintypes.UINT, wintypes.HWND)
+    except AttributeError:          # before Windows 10 1607
+        pass
+    _proto(_gdi32.CreateCompatibleDC, wintypes.HDC, wintypes.HDC)
+    _proto(_gdi32.DeleteDC, wintypes.BOOL, wintypes.HDC)
+    _proto(_gdi32.SelectObject, wintypes.HGDIOBJ, wintypes.HDC, wintypes.HGDIOBJ)
+    _proto(_gdi32.CreateFontW, wintypes.HFONT, ctypes.c_int, ctypes.c_int,
+           ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.DWORD,
+           wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+           wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR)
+    _proto(_gdi32.SetBkMode, ctypes.c_int, wintypes.HDC, ctypes.c_int)
+    _proto(_gdi32.SetTextColor, wintypes.COLORREF, wintypes.HDC,
+           wintypes.COLORREF)
+    _proto(_gdi32.GetTextExtentPoint32W, wintypes.BOOL, wintypes.HDC,
+           wintypes.LPCWSTR, ctypes.c_int, ctypes.POINTER(wintypes.SIZE))
 
     WM_NULL, WM_CLOSE, WM_CONTEXTMENU, WM_APP = 0x0000, 0x0010, 0x007B, 0x8000
     WM_LBUTTONUP, WM_LBUTTONDBLCLK = 0x0202, 0x0203
@@ -421,6 +467,11 @@ if IS_WIN:
     NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_SHOWTIP = 0x01, 0x02, 0x04, 0x80
     NOTIFYICON_VERSION_4 = 4
     SM_CXSMICON = 49
+    WM_MOUSEACTIVATE, WM_RBUTTONUP, MA_NOACTIVATE = 0x0021, 0x0205, 3
+    WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE = 0x40000000, 0x80000, 0x8000000
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, GW_HWNDPREV = 0x0010, 0x0040, 3
+    DT_LABEL = 0x0001 | 0x0004 | 0x0020 | 0x0100 | 0x0800   # centred single line
+    ULW_ALPHA, AC_SRC_ALPHA, ANTIALIASED_QUALITY, TRANSPARENT = 2, 1, 4, 1
 
     def make_icon(size, pixels):
         """HICON (caller DestroyIcon()s it) from top-down BGRA bytes, or None."""
@@ -454,23 +505,19 @@ if IS_WIN:
         Tk though: a ctypes callback runs while _tkinter has the Tcl thread
         state parked, and a nested Tk call from there clears that state, so
         the next Tk->Python callback dies with "PyEval_RestoreThread ...
-        thread state is NULL". The WNDPROC therefore only queues events and a
-        Tk timer (_poll) runs them on the Tk side a few ms later.
+        thread state is NULL". The WNDPROC therefore only queues (kind, arg)
+        events through `post`, and Card._poll runs them on the Tk side.
         """
         CLASS = "minimon-tray"
         UID = 0x6D69                     # stable icon id ("mi")
         MSG_NOTIFY = WM_APP + 1          # icon events arrive here
         MSG_SHOW = WM_APP + 2            # a second launch posts this to us
-        POLL_MS = 40
         SETTINGS = r"Control Panel\NotifyIconSettings"   # Win11 per-icon prefs
 
-        def __init__(self, root, on_toggle, on_menu, on_show, on_quit):
-            self.root = root
-            self.on_toggle, self.on_menu = on_toggle, on_menu
-            self.on_show, self.on_quit = on_show, on_quit
+        def __init__(self, post):
+            self.post = post
             # Everything _wndproc may touch is set before CreateWindowExW,
             # which already delivers WM_NCCREATE and friends to it.
-            self._pending = collections.deque()
             self._icon = None
             self._added = False
             self._retry_at = 0.0
@@ -496,7 +543,6 @@ if IS_WIN:
             self._nid = NOTIFYICONDATAW(cbSize=ctypes.sizeof(NOTIFYICONDATAW),
                                         hWnd=self.hwnd, uID=self.UID,
                                         uCallbackMessage=self.MSG_NOTIFY)
-            root.after(self.POLL_MS, self._poll)
 
         # --- shell side ---
         def update(self, bars, tip):
@@ -551,14 +597,14 @@ if IS_WIN:
                     self._event(lparam & 0xFFFF, wparam)
                     return 0
                 if msg == self.MSG_SHOW:
-                    self._pending.append(("show", None))
+                    self.post(("show", None))
                     return 0
                 if msg == self._taskbar_created:     # explorer restarted
                     self._added, self._retry_at = False, 0.0
                     self._add()
                     return 0
                 if msg == WM_CLOSE:                  # e.g. a polite taskkill
-                    self._pending.append(("quit", None))
+                    self.post(("quit", None))
                     return 0
             except Exception:       # never unwind into the message loop
                 if sys.stderr:      # pythonw has none; a console/log does
@@ -574,31 +620,11 @@ if IS_WIN:
                     return
                 if now - self._last_toggle > 0.3:   # NIN_* echoes of one click
                     self._last_toggle = now
-                    self._pending.append(("toggle", None))
+                    self.post(("toggle", None))
             elif ev == WM_CONTEXTMENU:   # right-click or Shift+F10 on the icon
                 x = ctypes.c_short(wparam & 0xFFFF).value
                 y = ctypes.c_short((wparam >> 16) & 0xFFFF).value
-                self._pending.append(("menu", (x, y)))
-
-        # --- Tk side ---
-        def _poll(self):
-            """Tk timer: run the queued icon events. Not re-entrant - while a
-            popup menu is open the next poll simply is not scheduled yet."""
-            while self._pending:
-                kind, arg = self._pending.popleft()
-                if kind == "toggle":
-                    self.on_toggle()
-                elif kind == "show":
-                    self.on_show()
-                elif kind == "menu":
-                    _user32.SetForegroundWindow(self.hwnd)  # closes on outside click
-                    self.on_menu(*arg)
-                    if self.hwnd:
-                        _user32.PostMessageW(self.hwnd, WM_NULL, 0, 0)
-                elif kind == "quit":
-                    self.on_quit()
-            if self.hwnd:                # cleared by remove() on shutdown
-                self.root.after(self.POLL_MS, self._poll)
+                self.post(("menu", (x, y)))
 
         # --- Windows 11 "show in the taskbar corner" (vs. the ^ overflow) ---
         def _settings_key(self):
@@ -653,6 +679,228 @@ if IS_WIN:
             except OSError:
                 return False
 
+    class TaskbarLabel:
+        """The Linux top-bar readout, on Windows: a per-pixel-alpha layered
+        child window parked inside explorer's Shell_TrayWnd just left of the
+        notification icons (the TrafficMonitor technique; the taskbar has no
+        text API of its own). The text is GDI grayscale-antialiased white on
+        black and that coverage becomes the alpha channel, so the glyphs sit
+        on the translucent taskbar with no box behind them. Newlines in the
+        text stack lines, centred like the clock next door.
+
+        Explorer keeps no record of the window: it is re-created whenever the
+        taskbar is, and re-anchored on every update. Parenting across
+        processes ties our input queue to explorer's, so the Tk thread must
+        stay responsive (it does - about a millisecond of work per tick).
+        Its WNDPROC only posts events, like TrayIcon's.
+        """
+        CLASS = "minimon-label"
+        HIT = bytes([1]) + bytes(range(1, 256))   # alpha floor: 0 -> 1
+        FONT = "Consolas"                # the Linux label is monospace too
+        PT = 12                          # px at 96 dpi, the taskbar clock's size
+        PAD = 6
+
+        def __init__(self, post, side="right"):
+            self.post = post
+            self.side = side             # "right": beside the tray; "left": far end
+            self.hwnd = self.parent = None
+            self._text = None
+            self._size = (0, 0)
+            self._last_click = 0.0
+            self._retry_at = 0.0
+            self._tables = {}
+            self._proc = WNDPROC(self._wndproc)      # must outlive the window
+            self._hinst = _kernel32.GetModuleHandleW(None)
+            wc = WNDCLASSW(lpfnWndProc=self._proc, hInstance=self._hinst,
+                           hCursor=_user32.LoadCursorW(None, 32512),  # IDC_ARROW
+                           lpszClassName=self.CLASS)
+            if not _user32.RegisterClassW(ctypes.byref(wc)):
+                raise ctypes.WinError(ctypes.get_last_error())
+
+        # --- lifecycle ---
+        def _attach(self):
+            """Make sure our window exists inside the current taskbar."""
+            if (self.hwnd and _user32.IsWindow(self.hwnd)
+                    and _user32.IsWindow(self.parent)
+                    and _user32.FindWindowW("Shell_TrayWnd", None) == self.parent):
+                return True
+            if self.hwnd:
+                _user32.DestroyWindow(self.hwnd)     # usually died with explorer
+                self.hwnd = self.parent = None
+            now = time.monotonic()
+            if now < self._retry_at:
+                return False
+            self._retry_at = now + 3.0
+            tb = _user32.FindWindowW("Shell_TrayWnd", None)
+            if not tb:
+                return False
+            rc = wintypes.RECT()
+            _user32.GetWindowRect(tb, ctypes.byref(rc))
+            if rc.bottom - rc.top > rc.right - rc.left:
+                return False                         # vertical taskbar: no room
+            hwnd = _user32.CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_NOACTIVATE, self.CLASS, "minimon",
+                WS_CHILD, 0, 0, 0, 0, tb, None, self._hinst, None)
+            if not hwnd:            # e.g. DPI-context mismatch on an old Windows
+                return False
+            self.hwnd, self.parent = hwnd, tb
+            self._text = None                        # repaint into the new window
+            return True
+
+        def update(self, text):
+            if not self._attach():
+                return
+            if text != self._text and self._paint(text):
+                self._text = text
+            if self._text is not None:
+                self._place()
+
+        def remove(self):
+            if self.hwnd and _user32.IsWindow(self.hwnd):
+                _user32.DestroyWindow(self.hwnd)
+            self.hwnd = self.parent = None
+
+        # --- drawing ---
+        @staticmethod
+        def _color():
+            """Taskbar text colour: near-black on a light taskbar, else white."""
+            try:
+                with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER,
+                        r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+                    light = winreg.QueryValueEx(k, "SystemUsesLightTheme")[0]
+            except OSError:
+                light = 0
+            return (0x10, 0x10, 0x10) if light else (0xff, 0xff, 0xff)
+
+        def _table(self, c):
+            """coverage -> premultiplied channel value, as a bytes.translate map"""
+            t = self._tables.get(c)
+            if t is None:
+                t = self._tables[c] = bytes(v * c // 255 for v in range(256))
+            return t
+
+        def _paint(self, text):
+            try:
+                dpi = _user32.GetDpiForWindow(self.parent) or 96
+            except AttributeError:
+                dpi = 96
+            px = max(11, round(self.PT * dpi / 96))
+            pad = round(self.PAD * dpi / 96)
+            rc = wintypes.RECT()
+            _user32.GetWindowRect(self.parent, ctypes.byref(rc))
+            h = rc.bottom - rc.top
+            hdc = _gdi32.CreateCompatibleDC(None)
+            font = _gdi32.CreateFontW(-px, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0,
+                                      ANTIALIASED_QUALITY, 0, self.FONT)
+            old_font = _gdi32.SelectObject(hdc, font)
+            _gdi32.SetBkMode(hdc, TRANSPARENT)
+            _gdi32.SetTextColor(hdc, 0xFFFFFF)
+            lines = text.split("\n")
+            ext, widths, cy = wintypes.SIZE(), [], 0
+            for ln in lines:
+                _gdi32.GetTextExtentPoint32W(hdc, ln, len(ln), ctypes.byref(ext))
+                widths.append(ext.cx)
+                cy = max(cy, ext.cy)
+            gap = round(dpi / 96)
+            w = max(widths) + 2 * pad
+            y = (h - (len(lines) * cy + (len(lines) - 1) * gap)) // 2
+            bih = BITMAPINFOHEADER(biSize=ctypes.sizeof(BITMAPINFOHEADER),
+                                   biWidth=w, biHeight=-h, biPlanes=1,
+                                   biBitCount=32)
+            bits = ctypes.c_void_p()
+            dib = _gdi32.CreateDIBSection(hdc, ctypes.byref(bih), 0,
+                                          ctypes.byref(bits), None, 0)
+            ok = False
+            if dib:
+                old_bmp = _gdi32.SelectObject(hdc, dib)
+                n = w * h * 4
+                ctypes.memset(bits, 0, n)
+                for i, ln in enumerate(lines):
+                    top = y + i * (cy + gap)
+                    box = wintypes.RECT(0, top, w, top + cy)
+                    _user32.DrawTextW(hdc, ln, -1, ctypes.byref(box), DT_LABEL)
+                # white-on-black coverage -> premultiplied BGRA in the text colour
+                cov = ctypes.string_at(bits, n)[0::4]
+                r, g, b = self._color()
+                out = bytearray(n)
+                out[0::4] = cov.translate(self._table(b))
+                out[1::4] = cov.translate(self._table(g))
+                out[2::4] = cov.translate(self._table(r))
+                # Layered windows hit-test per pixel and alpha 0 lets a click
+                # fall through to the taskbar, so keep every pixel at >= 1.
+                out[3::4] = cov.translate(self.HIT)
+                ctypes.memmove(bits, bytes(out), n)
+                blend = BLENDFUNCTION(0, 0, 255, AC_SRC_ALPHA)
+                ok = _user32.UpdateLayeredWindow(
+                    self.hwnd, None, None, ctypes.byref(wintypes.SIZE(w, h)),
+                    hdc, ctypes.byref(wintypes.POINT(0, 0)), 0,
+                    ctypes.byref(blend), ULW_ALPHA)
+                _gdi32.SelectObject(hdc, old_bmp)
+                _gdi32.DeleteObject(dib)
+            _gdi32.SelectObject(hdc, old_font)
+            _gdi32.DeleteObject(font)
+            _gdi32.DeleteDC(hdc)
+            if ok:
+                self._size = (w, h)
+            return bool(ok)
+
+        @staticmethod
+        def _widgets_button():
+            """Windows 11 parks its Widgets button at the taskbar's left end."""
+            try:
+                with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER,
+                        r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced") as k:
+                    return bool(winreg.QueryValueEx(k, "TaskbarDa")[0])
+            except OSError:
+                return False
+
+        def _place(self):
+            """Anchor to the left edge of the notification icons (or, with
+            side="left", to the taskbar's left end), and stay on top."""
+            prc, trc = wintypes.RECT(), wintypes.RECT()
+            _user32.GetWindowRect(self.parent, ctypes.byref(prc))
+            w, h = self._size
+            if self.side == "left":
+                x0 = prc.left + (2 * h if self._widgets_button() else 0)
+            else:
+                tray = _user32.FindWindowExW(self.parent, None, "TrayNotifyWnd", None)
+                x0 = (trc.left if tray and _user32.GetWindowRect(tray, ctypes.byref(trc))
+                      else prc.right) - w
+            mine = wintypes.RECT()
+            _user32.GetWindowRect(self.hwnd, ctypes.byref(mine))
+            if (_user32.IsWindowVisible(self.hwnd)
+                    and not _user32.GetWindow(self.hwnd, GW_HWNDPREV)
+                    and (mine.left, mine.top, mine.right, mine.bottom)
+                    == (x0, prc.top, x0 + w, prc.top + h)):
+                return
+            pt = wintypes.POINT(x0, prc.top)
+            _user32.ScreenToClient(self.parent, ctypes.byref(pt))
+            _user32.SetWindowPos(self.hwnd, None, pt.x, pt.y, w, h,
+                                 SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
+        # --- window side (no Tk calls in here) ---
+        def _wndproc(self, hwnd, msg, wparam, lparam):
+            try:
+                if msg == WM_LBUTTONUP:
+                    now = time.monotonic()
+                    if now - self._last_click > 0.3:   # a double-click's 2nd up
+                        self._last_click = now
+                        self.post(("toggle", None))
+                    return 0
+                if msg == WM_RBUTTONUP:
+                    pt = wintypes.POINT()
+                    _user32.GetCursorPos(ctypes.byref(pt))
+                    self.post(("menu", (pt.x, pt.y)))
+                    return 0
+                if msg == WM_MOUSEACTIVATE:
+                    return MA_NOACTIVATE
+            except Exception:
+                if sys.stderr:
+                    traceback.print_exc()
+            return _user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
 
 # ------------------------------------------------------------------- UI ----
 class Card:
@@ -703,17 +951,24 @@ class Card:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self._place()
+        self._events = collections.deque()   # from the tray/label window procs
+        self.label = None
         if IS_WIN and not args.no_tray:
             try:
-                self.tray = TrayIcon(self.root, on_toggle=self.toggle,
-                                     on_menu=self._tray_menu, on_show=self.show,
-                                     on_quit=self.quit)
+                self.tray = TrayIcon(post=self._events.append)
             except OSError:
                 self.tray = None
         if self.tray:
+            if not args.no_label:
+                try:
+                    self.label = TaskbarLabel(post=self._events.append,
+                                              side=args.label_side)
+                except OSError:
+                    self.label = None
             if args.hidden:
                 self.hide()
             self.root.after(2000, self._pin_once)
+            self.root.after(40, self._poll)
 
         self._last = time.monotonic()
         threading.Thread(target=self._claude_worker, daemon=True).start()
@@ -801,8 +1056,27 @@ class Card:
     def _menu(self, ev):
         self._build_menu().tk_popup(ev.x_root, ev.y_root)
 
-    def _tray_menu(self, x, y):
-        self._build_menu().tk_popup(x, y)
+    def _poll(self):
+        """Tk timer: run the events the tray icon and the taskbar readout
+        queued from their window procs. Not re-entrant - while a popup menu
+        is open the next poll simply is not scheduled yet."""
+        while self._events:
+            kind, arg = self._events.popleft()
+            if kind == "toggle":
+                self.toggle()
+            elif kind == "show":
+                self.show()
+            elif kind == "menu":
+                anchor = self.tray.hwnd if self.tray else None
+                if anchor:
+                    _user32.SetForegroundWindow(anchor)  # closes on outside click
+                self._build_menu().tk_popup(*arg)
+                if anchor and self.tray and self.tray.hwnd:
+                    _user32.PostMessageW(anchor, WM_NULL, 0, 0)
+            elif kind == "quit":
+                self.quit()
+        if not self.stop.is_set():
+            self.root.after(40, self._poll)
 
     def _pin_once(self, tries=0):
         """First run only: put the icon in the always-visible taskbar corner
@@ -824,6 +1098,9 @@ class Card:
             return
         self.stop.set()
         self._save_cfg()
+        if self.label:
+            self.label.remove()
+            self.label = None
         if self.tray:
             self.tray.remove()
             self.tray = None
@@ -892,6 +1169,53 @@ class Card:
             lines[2] = claude[:max(0, len(claude) - extra - 1)] + "…"
         return "\n".join(lines)[:127]
 
+    # --- taskbar readout ---
+    @staticmethod
+    def _quota_tags(rows):
+        """S9% W37% F38% - the GNOME extension's one-letter Claude summary."""
+        out = []
+        for key, _label, pct, _r in rows:
+            if key.startswith("session") or key == "five_hour":
+                tag = "S"
+            elif key in ("weekly_all", "seven_day"):
+                tag = "W"
+            elif ":" in key and key.startswith("weekly"):
+                tag = key.split(":", 1)[1][:1].upper()
+            elif key.startswith("seven_day_"):
+                tag = key[10:11].upper()
+            else:
+                continue
+            out.append("%s%.0f%%" % (tag, pct))
+        return " ".join(out) or "CC --"
+
+    def _label_text(self, d, rows):
+        """The GNOME top-bar label, stacked as two lines (hardware over
+        Claude) because the taskbar is twice as tall as the GNOME bar and
+        its clock is two lines too; one --format template per line."""
+        used, total = d["ram"]
+        deg = lambda t: "%.0f" % t if t else "--"
+        if self.args.format:
+            s = self._session_pct(rows)
+            values = dict(
+                cpu="%.0f" % d["cpu"], ct=deg(d["cpu_t"]),
+                gpu="%.0f" % d["gpu"], gt=deg(d["gpu_t"]),
+                mem="%.0f" % (100 * used / total), mt=deg(d.get("ram_t")),
+                cc="--" if s is None else "%.0f" % s,
+                claude=self._quota_tags(rows))
+            lines = []
+            for fmt in self.args.format:
+                try:
+                    lines.append(fmt.format(**values))
+                except (KeyError, IndexError, ValueError):
+                    lines.append(fmt)          # show the bad template as-is
+            return "\n".join(lines)
+        return "C%.0f%% %s° · G%.0f%%%s · M%.0f%%%s\n%s" % (
+            d["cpu"], deg(d["cpu_t"]), d["gpu"],
+            " %.0f°" % d["gpu_t"] if d["gpu_t"] else "",
+            100 * used / total,
+            " %.0f°" % d["ram_t"] if d.get("ram_t") else "",
+            self._quota_tags(rows))
+
     # --- drawing ---
     def _rround(self, x0, y0, x1, y1, r, **kw):
         c = self.canvas
@@ -926,6 +1250,8 @@ class Card:
         rows = list(self.claude_rows)
         if self.tray:
             self.tray.update(self._tray_bars(d, rows), self._tray_tip(d, rows))
+        if self.label:
+            self.label.update(self._label_text(d, rows))
         if not self.hidden:
             self._draw(d, rows)
         self.root.after(int(self.args.interval * 1000), self.tick)
@@ -1010,14 +1336,32 @@ def main():
     p.add_argument("--no-tray", action="store_true",
                    help="no notification-area icon; the card's close button quits")
     p.add_argument("--hidden", action="store_true",
-                   help="start with the card hidden (tray icon only)")
+                   help="start with the card hidden (taskbar only)")
+    p.add_argument("--no-label", action="store_true",
+                   help="no live readout in the taskbar, just the tray icon")
+    p.add_argument("--label-side", choices=("right", "left"), default="right",
+                   help="where the readout sits: right = beside the tray icons "
+                        "(default), left = the taskbar's left end, for taskbars "
+                        "too crowded on the right")
+    p.add_argument("--format", nargs="+", default=None, metavar="LINE",
+                   help="taskbar readout, one template per line, with {cpu} "
+                        "{ct} {gpu} {gt} {mem} {mt} {cc} {claude} tokens "
+                        "(default: the GNOME top-bar label as two lines, "
+                        "C4%% 55° · G2%% 45° · M48%% over S9%% W37%% F38%%)")
     args = p.parse_args()
 
     if IS_WIN:
+        # Per-monitor v2 is the taskbar's own DPI context, and a window can
+        # only be parented into explorer's taskbar when both sides match.
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except OSError:
-            pass
+            _user32.SetProcessDpiAwarenessContext.argtypes = (ctypes.c_ssize_t,)
+            if not _user32.SetProcessDpiAwarenessContext(-4):
+                raise OSError
+        except (AttributeError, OSError):
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except OSError:
+                pass
         mutex = ctypes.windll.kernel32.CreateMutexW(None, False,
                                                     "minimon-win-single")
         if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
