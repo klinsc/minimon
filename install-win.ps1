@@ -45,7 +45,7 @@ if (Test-Path $exe) {
 $shell = New-Object -ComObject WScript.Shell
 $s = $shell.CreateShortcut($lnk)
 $s.TargetPath = $target
-if ($targetArgs) { $s.Arguments = $targetArgs }
+$s.Arguments = $targetArgs   # set even when empty, to clear a stale arg on an existing .lnk
 $s.WorkingDirectory = $dest
 $s.WindowStyle = 7
 $s.Save()
@@ -59,5 +59,6 @@ $action = "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Fi
 schtasks /Create /TN $task /TR $action /SC HOURLY /F | Out-Null
 Write-Host "Scheduled task '$task' created (hourly)."
 
-Start-Process $target -ArgumentList $targetArgs
+if ($targetArgs) { Start-Process $target -ArgumentList $targetArgs }
+else { Start-Process $target }   # Start-Process rejects an empty -ArgumentList
 Write-Host "minimon launched. It will now start automatically at login."
