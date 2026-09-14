@@ -250,6 +250,14 @@ class WinSensors:
     def read_all(self, dt):
         used, total = self.mem()
         rx, tx = self.net(dt)
+        # GPU core load, or a "D3D 3D" utilisation when that is all the GPU
+        # exposes. Both must be *load* sensors: without the type filter
+        # "D3D Dedicated Memory Used" (megabytes) also matches "gpu"/"3d" and,
+        # picked as the largest, reads as hundreds of percent. A real 0.0 is a
+        # valid reading, so test against None rather than falsiness.
+        gpu = self._lhm_pick("load", "gpu", "core")
+        if gpu is None:
+            gpu = self._lhm_pick("load", "gpu", "3d")
         return {
             "cpu": self.cpu_percent(),
             # Tctl on AMD, CPU Package on Intel, hottest core as a last resort
@@ -261,8 +269,7 @@ class WinSensors:
                     self._lhm_pick("clock", "core",
                                    reject=("bus", "gpu", "memory")) or 0)
             / 1000 or None,
-            "gpu": self._lhm_pick("load", "gpu", "core")
-            or self._lhm_pick("", "gpu", "d3d", "3d") or 0.0,
+            "gpu": gpu if gpu is not None else 0.0,
             "gpu_t": self._temp("gpu", "core")
             or self._temp("gpu", reject=("hot spot", "junction", "memory")),
             "gpu_w": self._lhm_pick("power", "gpu"),
