@@ -1193,7 +1193,8 @@ class Card:
     # --- taskbar readout ---
     @staticmethod
     def _quota_tags(rows):
-        """S9% W37% F38% - the GNOME extension's one-letter Claude summary."""
+        """S  9% W 37% F 38% - the GNOME extension's one-letter Claude summary,
+        each percent right-aligned in 3 so the readout keeps a constant width."""
         out = []
         for key, _label, pct, _r in rows:
             if key.startswith("session") or key == "five_hour":
@@ -1206,22 +1207,27 @@ class Card:
                 tag = key[10:11].upper()
             else:
                 continue
-            out.append("%s%.0f%%" % (tag, pct))
+            out.append("%s%3.0f%%" % (tag, pct))
         return " ".join(out) or "CC --"
 
     def _label_text(self, d, rows):
         """The GNOME top-bar label, stacked as two lines (hardware over
         Claude) because the taskbar is twice as tall as the GNOME bar and
-        its clock is two lines too; one --format template per line."""
+        its clock is two lines too; one --format template per line.
+
+        Every number is right-aligned in a fixed field - percentages in 3
+        (they reach 100), temperatures in 2 - so that in the monospace font
+        the text keeps a constant width and the readout does not jitter left
+        and right as values cross between one, two and three digits."""
         used, total = d["ram"]
-        deg = lambda t: "%.0f" % t if t else "--"
+        deg = lambda t: "%2.0f" % t if t else "--"
         if self.args.format:
             s = self._session_pct(rows)
             values = dict(
-                cpu="%.0f" % d["cpu"], ct=deg(d["cpu_t"]),
-                gpu="%.0f" % d["gpu"], gt=deg(d["gpu_t"]),
-                mem="%.0f" % (100 * used / total), mt=deg(d.get("ram_t")),
-                cc="--" if s is None else "%.0f" % s,
+                cpu="%3.0f" % d["cpu"], ct=deg(d["cpu_t"]),
+                gpu="%3.0f" % d["gpu"], gt=deg(d["gpu_t"]),
+                mem="%3.0f" % (100 * used / total), mt=deg(d.get("ram_t")),
+                cc="--" if s is None else "%3.0f" % s,
                 claude=self._quota_tags(rows))
             lines = []
             for fmt in self.args.format:
@@ -1230,11 +1236,11 @@ class Card:
                 except (KeyError, IndexError, ValueError):
                     lines.append(fmt)          # show the bad template as-is
             return "\n".join(lines)
-        return "C%.0f%% %s° · G%.0f%%%s · M%.0f%%%s\n%s" % (
+        return "C%3.0f%% %s° · G%3.0f%%%s · M%3.0f%%%s\n%s" % (
             d["cpu"], deg(d["cpu_t"]), d["gpu"],
-            " %.0f°" % d["gpu_t"] if d["gpu_t"] else "",
+            " %2.0f°" % d["gpu_t"] if d["gpu_t"] else "",
             100 * used / total,
-            " %.0f°" % d["ram_t"] if d.get("ram_t") else "",
+            " %2.0f°" % d["ram_t"] if d.get("ram_t") else "",
             self._quota_tags(rows))
 
     # --- drawing ---
