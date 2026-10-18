@@ -1,10 +1,9 @@
 # minimon
 
-An NZXT CAM "mini mode" style hardware + Claude Code usage monitor, for
-**Linux** (GTK) and **Windows 11** (tkinter). It shows CPU / GPU / RAM load and
-temperatures, network rates, and your Claude Code rate-limit windows (session /
-week / per-model week) with a local per-day call and token tally — in a small
-always-on-top card, and in the panel or taskbar.
+An NZXT CAM "mini mode" style hardware monitor, for **Linux** (GTK) and
+**Windows 11** (tkinter). It shows CPU / GPU / RAM load and temperatures, clock
+speed, GPU power, SSD temperature and network rates — in a small always-on-top
+card, and in the panel or taskbar.
 
 ![floating card](docs/screenshot.png)
 
@@ -19,7 +18,7 @@ Same readout on both systems:
 
 Jump to: [Install on Windows 11](#install-on-windows-11) ·
 [Install on Linux](#install-on-linux) · [Controls](#controls) ·
-[Options](#command-line-options) · [Claude Code usage](#claude-code-usage) ·
+[Options](#command-line-options) ·
 [Where the numbers come from](#where-the-numbers-come-from)
 
 ---
@@ -32,7 +31,7 @@ Windows has no unprivileged way to read CPU/GPU temperature — that needs a
 kernel driver. minimon gets those numbers from
 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
 (LHM) when it is running. Without it, minimon still shows CPU / RAM / network
-load and Claude usage, and quietly notes `no LHM`; temperatures, GPU load/power
+load, and quietly notes `no LHM`; temperatures, GPU load/power
 and clock speed just read `--`.
 
 1. **Install it:**
@@ -67,23 +66,22 @@ packages required.
   [Using minimon on Windows](#using-minimon-on-windows) below).
 
 - **Install it so it starts at login** (recommended): put the exe in a folder
-  next to [`install-win.ps1`](install-win.ps1) and
-  [`refresh-token.ps1`](refresh-token.ps1) from this repo, then:
+  next to [`install-win.ps1`](install-win.ps1) from this repo, then:
 
   ```
   powershell -ExecutionPolicy Bypass -File install-win.ps1
   ```
 
   This copies the exe to `%LOCALAPPDATA%\minimon`, adds a **Startup shortcut**
-  so it launches at login, registers an **hourly Claude-token-refresh task**
-  (see [Token freshness](#token-freshness)), and starts it.
+  so it launches at login, and starts it.
 
 - **Upgrade:** download the newer exe and re-run `install-win.ps1` the same
-  way — it replaces the installed copy in place and keeps the shortcut and task
-  pointed at it.
+  way — it replaces the installed copy in place and keeps the shortcut pointed
+  at it. It also deletes the hourly **"minimon token refresh"** scheduled task
+  that versions with Claude usage bars registered.
 
 - **Uninstall:** `powershell -ExecutionPolicy Bypass -File install-win.ps1 -Uninstall`
-  removes the Startup shortcut and the scheduled task.
+  removes the Startup shortcut (and that legacy task, if it is still there).
 
 **Run from source instead:** `pythonw minimon-win.pyw` with `minimon_core.py`
 alongside it. Any Windows Python 3.10+ works and tkinter ships with it; there
@@ -93,14 +91,13 @@ are no other dependencies. `--demo` renders synthetic data on any OS.
 
 minimon lives in the taskbar in two parts:
 
-- **The readout** — the same live label the GNOME extension shows, drawn just
-  left of the notification icons. The taskbar is twice as tall as the GNOME
-  bar, so it is stacked as two lines like the clock beside it: hardware on top
-  (`C4% 55° · G2% 45° · M48%`), Claude quotas underneath (`S9% W37% F38%` —
-  **S**ession, **W**eek, per-model week such as **F**able).
-- **The tray icon** — a miniature of the card (CPU, GPU, RAM and
-  Claude-session meters; a meter turns red when that part is at 85 °C or hotter,
-  or the session is at 90 %+), with the full numbers in its tooltip.
+- **The readout** — the same live label the GNOME extension shows
+  (`C4% 55° · G2% 45° · M48%`), drawn just left of the notification icons.
+  `--format` takes one template per line if you want it stacked like the
+  two-line clock beside it.
+- **The tray icon** — a miniature of the card (CPU, GPU and RAM meters; a
+  meter turns red when that part is at 85 °C or hotter), with the full numbers
+  in its tooltip.
 
 Both respond the same way:
 
@@ -151,7 +148,7 @@ install.
 ### 2. Pick a form and install it
 
 minimon comes in three interchangeable Linux front-ends. All share the same
-sensor and Claude-usage plumbing.
+sensor plumbing.
 
 **a) GNOME Shell extension + daemon (the autostarting default).** A compact
 live label in the top bar; clicking it opens a popup that reproduces the
@@ -179,7 +176,7 @@ python3 minimon.py
 python3 minimon-bar.py
 ```
 
-`--format` customizes its label with `{cpu} {ct} {gpu} {gt} {mem} {cc}` tokens.
+`--format` customizes its label with `{cpu} {ct} {gpu} {gt} {mem}` tokens.
 
 ### Autostart on Linux
 
@@ -195,6 +192,22 @@ gnome-extensions disable minimon@klinsc.github
 
 Only one instance can run: it holds an abstract-namespace socket lock, so a
 duplicate launch prints `minimon is already running` and exits.
+
+### Upgrading from a version with Claude usage bars
+
+Older versions also showed Claude Code rate limits and kept its OAuth token
+fresh with an hourly systemd user timer that ran the `claude` CLI. That is all
+gone now; remove the timer, then restart the daemon (or log out and in) so it
+picks up the new code:
+
+```
+systemctl --user disable --now claude-token-refresh.timer
+rm ~/.config/systemd/user/claude-token-refresh.{service,timer}
+systemctl --user daemon-reload
+pkill -f minimon-daemon.py; python3 /path/to/minimon/minimon-daemon.py &
+```
+
+The GNOME extension is a copy, so re-copy it as in step 2a and reload the shell.
 
 ---
 
@@ -213,7 +226,7 @@ duplicate launch prints `minimon is already running` and exits.
 | Flag | Meaning |
 |---|---|
 | `--interval SECONDS` | refresh rate (default 1.0) |
-| `--format LINE [LINE …]` | taskbar readout, one template per line, from `{cpu} {ct} {gpu} {gt} {mem} {mt} {cc} {claude}` (default: the two-line GNOME label) |
+| `--format LINE [LINE …]` | taskbar readout, one template per line, from `{cpu} {ct} {gpu} {gt} {mem} {mt}` (default: the GNOME label) |
 | `--label-side {right,left}` | put the readout beside the tray icons (default) or at the taskbar's left end, if the centered app icons crowd it |
 | `--no-label` | tray icon only, no taskbar readout |
 | `--no-tray` | plain floating card only, no taskbar presence (`✕` quits) |
@@ -228,54 +241,12 @@ duplicate launch prints `minimon is already running` and exits.
 | `--opacity 0-1` | card opacity (default 0.92) |
 | `--width PX` | widget width (default 232) |
 | `--pos X,Y` | initial position |
-| `--no-claude` | hide the Claude Code section |
 
 Card position is stored in `~/.config/minimon.json` (Linux) /
 `%APPDATA%\minimon\config.json` (Windows).
 
-The AppIndicator bar (`minimon-bar.py`) takes `--interval`, `--no-claude`, and
-`--format` (tokens `{cpu} {ct} {gpu} {gt} {mem} {cc}`).
-
----
-
-## Claude Code usage
-
-The bottom section mirrors the in-app usage button:
-
-- **Session / Week / per-model weekly bars** — fetched every 2 min from the
-  same `api.anthropic.com/api/oauth/usage` endpoint the usage button reads.
-  Rows come from the response's `limits` array, so every window the in-app
-  breakdown shows (session, weekly all-models, and scoped weeks such as
-  Week·Fable) appears automatically, using the OAuth token in
-  `~/.claude/.credentials.json`. The token is read fresh each poll and sent
-  nowhere except api.anthropic.com. When it is expired the header shows
-  `token stale` and the bars pause until it is refreshed.
-- **today N calls · N out tok** — tallied locally from the transcript JSONLs in
-  `~/.claude/projects/`, deduplicated by requestId, an incremental byte-offset
-  scan every 60 s (no network needed).
-
-Point minimon at non-default locations with the `MINIMON_CRED_FILE` and
-`MINIMON_PROJECTS` environment variables. On Linux, `--no-claude` hides the
-whole section; `MINIMON_USAGE_JSON=<file>` feeds the bars from a JSON file
-instead of the API (for debugging).
-
-### Token freshness
-
-The desktop app never rewrites the credentials file, so minimon ships a small
-job that keeps the OAuth token fresh. It is a free local check that only spends
-one minimal Haiku CLI call when the token has under 90 min left (~3 calls/day).
-
-- **Windows** — `install-win.ps1` registers the hourly scheduled task
-  **"minimon token refresh"** running [`refresh-token.ps1`](refresh-token.ps1).
-  Inspect it with `schtasks /Query /TN "minimon token refresh"`.
-
-- **Linux** — a systemd user timer runs [`refresh-token.sh`](refresh-token.sh):
-
-  ```
-  systemctl --user list-timers claude-token-refresh.timer   # next run
-  journalctl --user -u claude-token-refresh.service         # history
-  systemctl --user disable --now claude-token-refresh.timer # remove
-  ```
+The AppIndicator bar (`minimon-bar.py`) takes `--interval` and `--format`
+(tokens `{cpu} {ct} {gpu} {gt} {mem}`).
 
 ---
 
@@ -301,8 +272,6 @@ hardware:
 | SSD temp | `nvme` hwmon (Composite) |
 | RAM temp | `spd5118` / `jc42` hwmon when the DIMMs have sensors (typical DDR4 does not) |
 | Network | `/proc/net/dev`, virtual interfaces filtered out |
-
-Claude usage on both systems comes from the same `~/.claude` files the CLI uses.
 
 ---
 

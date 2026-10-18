@@ -19,13 +19,6 @@ function fmtRate(b) {
     return `${Math.round(b)}B`;
 }
 
-function fmtCount(n) {
-    for (const [u, div] of [['B', 1e9], ['M', 1e6], ['K', 1e3]])
-        if (n >= div)
-            return `${(n / div).toFixed(1)}${u}`;
-    return `${n}`;
-}
-
 class MeterRow {
     constructor(name, fillClass) {
         this.box = new St.BoxLayout({vertical: true, style: 'spacing: 3px;'});
@@ -112,22 +105,6 @@ class MinimonIndicator extends PanelMenu.Button {
         }
         this._card.add_child(grid);
 
-        const chead = new St.BoxLayout({style: 'padding-top: 6px;'});
-        chead.add_child(new St.Label({text: 'CLAUDE CODE',
-            style_class: 'minimon-host', x_expand: true,
-            x_align: Clutter.ActorAlign.START}));
-        this._cstat = new St.Label({style_class: 'minimon-foot'});
-        chead.add_child(this._cstat);
-        this._card.add_child(chead);
-
-        this._usageBox = new St.BoxLayout({vertical: true, style: 'spacing: 8px; padding-top: 4px;'});
-        this._card.add_child(this._usageBox);
-        this._usageRows = new Map();
-
-        this._today = new St.Label({style_class: 'minimon-foot',
-            style: 'padding-top: 4px;', text: 'today  --'});
-        this._card.add_child(this._today);
-
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         const launch = new PopupMenu.PopupMenuItem('Open floating widget');
         launch.connect('activate', () => {
@@ -155,30 +132,16 @@ class MinimonIndicator extends PanelMenu.Button {
         const d = this._read();
         if (!d) {
             this._label.text = 'minimon: no daemon';
-            this._cstat.text = '';
             return;
         }
         this._widgetPath = d.widget;
         const [used, total] = d.ram;
         const memPct = 100 * used / total;
-        const quota = [];
-        for (const [key, , pct] of (d.claude?.rows || [])) {
-            let tag = null;
-            if (key.startsWith('session') || key === 'five_hour')
-                tag = 'S';
-            else if (key === 'weekly_all' || key === 'seven_day')
-                tag = 'W';
-            else if (key.startsWith('weekly_scoped:'))
-                tag = key.split(':')[1][0].toUpperCase();
-            if (tag)
-                quota.push(`${tag}${Math.round(pct)}%`);
-        }
         const gpuT = d.gpu_t ? ` ${Math.round(d.gpu_t)}°` : '';
         const ramT = d.ram_t ? ` ${Math.round(d.ram_t)}°` : '';
         this._label.text =
             `C${Math.round(d.cpu)}% ${d.cpu_t ? Math.round(d.cpu_t) : '--'}° · ` +
-            `G${Math.round(d.gpu)}%${gpuT} · M${Math.round(memPct)}%${ramT} · ` +
-            (quota.length ? quota.join(' ') : 'CC --');
+            `G${Math.round(d.gpu)}%${gpuT} · M${Math.round(memPct)}%${ramT}`;
 
         this._host.text = d.host || '';
         this._cpu.update(d.cpu / 100, `${Math.round(d.cpu)}%`,
@@ -196,30 +159,6 @@ class MinimonIndicator extends PanelMenu.Button {
         vramR.text = d.disk_t ? `SSD ${Math.round(d.disk_t)}°C` : '';
         netL.text = `↓ ${fmtRate(d.net[0])}/s`;
         netR.text = `↑ ${fmtRate(d.net[1])}/s`;
-
-        const cl = d.claude || {};
-        this._cstat.text = cl.err || '';
-        const seen = new Set();
-        const fills = ['minimon-fill-u0', 'minimon-fill-u1', 'minimon-fill-u2'];
-        (cl.rows || []).forEach(([key, label, pct, resets], i) => {
-            seen.add(key);
-            let row = this._usageRows.get(key);
-            if (!row) {
-                row = new MeterRow(label, fills[Math.min(i, fills.length - 1)]);
-                this._usageRows.set(key, row);
-                this._usageBox.add_child(row.box);
-            }
-            row.update(pct / 100, `${Math.round(pct)}%`, resets || '', pct);
-        });
-        for (const [key, row] of this._usageRows) {
-            if (!seen.has(key) && (cl.rows || []).length) {
-                row.box.destroy();
-                this._usageRows.delete(key);
-            }
-        }
-        const t = cl.today || {};
-        this._today.text =
-            `today  ${fmtCount(t.calls || 0)} calls · ${fmtCount(t.out || 0)} out tok`;
     }
 
     destroy() {
