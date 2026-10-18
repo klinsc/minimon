@@ -97,16 +97,20 @@ class WinSensors:
         return used, total
 
     def net(self, dt):
-        # GetIfTable2 walk kept minimal: sum octets on operational interfaces
+        # GetIfTable2 walk kept minimal: sum octets on physical adapters
         try:
             iphlpapi = ctypes.windll.iphlpapi
         except OSError:
             return 0.0, 0.0
 
-        class MIB_IF_ROW2(ctypes.Structure):
+        class MIB_IF_ROW2(ctypes.Structure):    # 1352 bytes, as in netioapi.h
             _fields_ = [("InterfaceLuid", ctypes.c_uint64),
                         ("InterfaceIndex", ctypes.c_uint32),
-                        ("_pad", ctypes.c_ubyte * 1220),
+                        ("_pad", ctypes.c_ubyte * 1140),
+                        # InterfaceAndOperStatusFlags, at offset 1152:
+                        # bit 0 HardwareInterface, bit 1 FilterInterface
+                        ("Flags", ctypes.c_ubyte),
+                        ("_pad2", ctypes.c_ubyte * 55),
                         ("InOctets", ctypes.c_uint64),
                         ("InUcastPkts", ctypes.c_uint64),
                         ("InNUcastPkts", ctypes.c_uint64),
@@ -117,7 +121,7 @@ class WinSensors:
                         ("InMulticastOctets", ctypes.c_uint64),
                         ("InBroadcastOctets", ctypes.c_uint64),
                         ("OutOctets", ctypes.c_uint64),
-                        ("_tail", ctypes.c_ubyte * 80)]
+                        ("_tail", ctypes.c_ubyte * 64)]
 
         class MIB_IF_TABLE2(ctypes.Structure):
             _fields_ = [("NumEntries", ctypes.c_uint32),
@@ -134,8 +138,14 @@ class WinSensors:
                 ctypes.addressof(ptr.contents.Table),
                 ctypes.POINTER(MIB_IF_ROW2 * n)).contents
             for row in rows:
-                rx += row.InOctets
-                tx += row.OutOctets
+                # Every filter driver stacked on a NIC (QoS, WFP, Wi-Fi
+                # filters...) is listed again with the NIC's own counters,
+                # and loopback, Hyper-V and tunnel interfaces are virtual:
+                # count hardware adapters only, as the Linux card skips lo
+                # and bridges.
+                if row.Flags & 3 == 1:
+                    rx += row.InOctets
+                    tx += row.OutOctets
         finally:
             iphlpapi.FreeMibTable(ptr)
         cur = (rx, tx)
