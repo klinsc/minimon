@@ -5,20 +5,18 @@ Pure GTK3 + /proc + /sys. No root, no external deps beyond PyGObject.
 Left-drag to move, right-click for the menu, position is remembered.
 """
 import argparse
-import datetime
 import glob
 import json
 import os
 import signal
 import socket
 import sys
-import threading
-import time
-import urllib.request
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+
+from minimon_core import rate  # noqa: E402,F401 - re-exported for the bar
 
 CONFIG = os.path.expanduser("~/.config/minimon.json")
 
@@ -55,9 +53,6 @@ progressbar progress {
 progressbar.cpu progress { background-color: #7c5cff; }
 progressbar.gpu progress { background-color: #22d3ee; }
 progressbar.ram progress { background-color: #34d399; }
-progressbar.u0 progress { background-color: #e879f9; }
-progressbar.u1 progress { background-color: #fb923c; }
-progressbar.u2 progress { background-color: #f87171; }
 separator { background-color: rgba(255,255,255,0.07); min-height: 1px; }
 menu { background-color: #1b1d23; color: #e8e8ea; }
 menuitem:hover { background-color: #7c5cff; }
@@ -189,11 +184,6 @@ class Sensors:
         }
 
 
-from minimon_core import (  # noqa: F401 - re-exported for daemon/bar
-    CRED_FILE, PROJECTS, USAGE_URL, CLAUDE_WINDOWS, ClaudeStats,
-    fetch_claude_usage, fmt_count, rate, reset_text, usage_rows)
-
-
 class Row:
     def __init__(self, name, css_class):
         self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
@@ -292,24 +282,6 @@ class Monitor(Gtk.Window):
             self.foot[key] = lbl
         card.pack_start(grid, False, False, 0)
 
-        self.claude_rows = {}
-        if not args.no_claude:
-            card.pack_start(Gtk.Separator(), False, False, 2)
-            chead = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            clbl = Gtk.Label(label="CLAUDE CODE", xalign=0)
-            clbl.set_name("host")
-            self.cstat = Gtk.Label(label="", xalign=1)
-            self.cstat.get_style_context().add_class("foot")
-            chead.pack_start(clbl, False, False, 0)
-            chead.pack_end(self.cstat, False, False, 0)
-            card.pack_start(chead, False, False, 0)
-            self.claude_box = Gtk.Box(
-                orientation=Gtk.Orientation.VERTICAL, spacing=9)
-            card.pack_start(self.claude_box, False, False, 0)
-            self.ctoday = Gtk.Label(label="today  --", xalign=0)
-            self.ctoday.get_style_context().add_class("foot")
-            card.pack_start(self.ctoday, False, False, 0)
-
         self.menu = Gtk.Menu()
         for label, cb in (("Move to top-right", self.snap_tr),
                           ("Move to bottom-right", self.snap_br),
@@ -329,10 +301,6 @@ class Monitor(Gtk.Window):
         self._last = GLib.get_monotonic_time() / 1e6
         self.tick()
         GLib.timeout_add(int(args.interval * 1000), self.tick)
-
-        self._claude_stop = threading.Event()
-        if not args.no_claude:
-            threading.Thread(target=self._claude_worker, daemon=True).start()
 
     # ---- placement -------------------------------------------------
     def place(self):
@@ -373,55 +341,12 @@ class Monitor(Gtk.Window):
         return False
 
     def quit(self):
-        self._claude_stop.set()
         x, y = self.get_position()
         try:
             json.dump({"x": x, "y": y}, open(CONFIG, "w"))
         except OSError:
             pass
         Gtk.main_quit()
-
-    # ---- Claude Code usage -----------------------------------------
-    def _claude_worker(self):
-        stats = ClaudeStats()
-        next_api = 0.0
-        while not self._claude_stop.is_set():
-            try:
-                local = stats.scan()
-            except Exception:
-                local = None
-            api = err = None
-            if time.time() >= next_api:
-                api, err = fetch_claude_usage()
-                if err and not self.claude_rows:
-                    delay = 30    # at login the network may still be coming up
-                else:
-                    delay = 300 if err else 180
-                next_api = time.time() + delay
-            GLib.idle_add(self._apply_claude, local, api, err)
-            self._claude_stop.wait(60)
-
-    def _apply_claude(self, local, api, err):
-        if local is not None:
-            self.ctoday.set_text("today  %s calls · %s out tok"
-                                 % (fmt_count(local["calls"]),
-                                    fmt_count(local["out"])))
-        if err is not None:
-            self.cstat.set_text(err)
-        elif api is not None:
-            self.cstat.set_text("")
-        if api:
-            colors = ("u0", "u1", "u2")
-            for i, (key, label, pct, resets) in enumerate(usage_rows(api)):
-                row = self.claude_rows.get(key)
-                if row is None:
-                    row = self.claude_rows[key] = Row(
-                        label, colors[min(i, len(colors) - 1)])
-                    self.claude_box.pack_start(row.box, False, False, 0)
-                    row.box.show_all()
-                u = max(0.0, min(100.0, pct))
-                row.update(u / 100.0, "%3.0f%%" % u, reset_text(resets), u)
-        return False
 
     # ---- refresh ---------------------------------------------------
     def tick(self):
@@ -457,8 +382,6 @@ def main():
     p.add_argument("--opacity", type=float, default=0.92, help="card opacity 0-1")
     p.add_argument("--width", type=int, default=232, help="widget width in px")
     p.add_argument("--pos", help="initial position as X,Y")
-    p.add_argument("--no-claude", action="store_true",
-                   help="hide the Claude Code usage section")
     args = p.parse_args()
 
     # Single instance: an abstract-namespace socket is released automatically

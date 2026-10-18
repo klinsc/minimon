@@ -4,14 +4,12 @@
 Pure stdlib (tkinter + ctypes). CPU load, RAM and network come from the
 Win32 API. Temperatures, GPU load/power, VRAM and fan-adjacent extras come
 from LibreHardwareMonitor when it is running (Options -> Remote Web Server,
-default port 8085; falls back to LHM's WMI namespace). Claude Code usage
-comes from minimon_core, reading the same files the CLI uses.
+default port 8085; falls back to LHM's WMI namespace).
 
 It lives in the taskbar next to the Wi-Fi, volume and battery icons: a live
-readout like the GNOME top-bar label (C4% 55° · G2% 45° · M48% · S9% W37%)
-sits just left of the notification icons, and the tray icon itself is a
-miniature of the card (CPU, GPU, RAM and Claude-session meters) with the
-numbers in its tooltip. Left-click either to toggle the floating card,
+readout like the GNOME top-bar label (C4% 55° · G2% 45° · M48%) sits just
+left of the notification icons, and the tray icon itself is a miniature of
+the card (CPU, GPU and RAM meters) with the numbers in its tooltip. Left-click either to toggle the floating card,
 right-click for the menu. All of it is plain Win32 through ctypes - still
 no third-party packages.
 
@@ -46,14 +44,8 @@ FG = "#ffffff"
 DIM = "#9a9aa5"
 WARM, HOT = "#fbbf24", "#f87171"
 TRACK = "#2a2b33"
-COLORS = {"cpu": "#7c5cff", "gpu": "#22d3ee", "ram": "#34d399",
-          "u0": "#e879f9", "u1": "#fb923c", "u2": "#f87171"}
+COLORS = {"cpu": "#7c5cff", "gpu": "#22d3ee", "ram": "#34d399"}
 W, PAD, BARH = 252, 14, 5
-
-
-def short_reset(iso):
-    r = core.reset_text(iso)
-    return r[7:] if r.startswith("resets ") else r
 
 
 # ---------------------------------------------------------------- sensors --
@@ -935,9 +927,6 @@ class Card:
     def __init__(self, args):
         self.args = args
         self.sensors = DemoSensors() if args.demo else WinSensors()
-        self.claude_rows = []
-        self.claude_err = None
-        self.today = {"calls": 0, "out": 0}
         self.stop = threading.Event()
         self.cfg = {}
         self.hidden = False
@@ -963,9 +952,6 @@ class Card:
         self.row_h = self.lh + 4 + BARH + 10
         self.W = max(
             W,
-            self.mono.measure("today  9.9K calls · 9.9M tok") + 2 * PAD + 4,
-            self.sans.measure("Week·Fable") + 12
-            + self.mono.measure("Wed 00:00") + self.val_w + 2 * PAD,
             self.sans.measure("RAM") + 12
             + self.mono.measure("88°C · 88.8/88 GB") + self.val_w + 2 * PAD)
         self.canvas = tk.Canvas(self.root, width=self.W, height=200,
@@ -999,7 +985,6 @@ class Card:
             self.root.after(40, self._poll)
 
         self._last = time.monotonic()
-        threading.Thread(target=self._claude_worker, daemon=True).start()
         threading.Thread(target=self._lhm_worker, daemon=True).start()
         self.tick()
 
@@ -1140,87 +1125,28 @@ class Card:
             self.sensors.refresh_lhm()
             self.stop.wait(2.0)
 
-    def _claude_worker(self):
-        stats = core.ClaudeStats()
-        next_api = 0.0
-        while not self.stop.is_set():
-            try:
-                self.today = stats.scan()
-            except Exception:
-                pass
-            if time.time() >= next_api:
-                api, err = core.fetch_claude_usage()
-                if api:
-                    self.claude_rows = core.usage_rows(api)
-                    self.claude_err = None
-                else:
-                    self.claude_err = err
-                next_api = time.time() + (
-                    30 if (err and not self.claude_rows)
-                    else (300 if err else 180))
-            self.stop.wait(60)
-
     # --- tray feed ---
     @staticmethod
-    def _session_pct(rows):
-        for key, _label, pct, _resets in rows:
-            if key.startswith("session") or key == "five_hour":
-                return pct
-        return None
-
-    def _tray_bars(self, d, rows):
+    def _tray_bars(d):
         used, total = d["ram"]
         hot = lambda t: (t or 0) >= 85
-        s = self._session_pct(rows) or 0
         return [(d["cpu"] / 100, HOT if hot(d["cpu_t"]) else COLORS["cpu"]),
                 (d["gpu"] / 100, HOT if hot(d["gpu_t"]) else COLORS["gpu"]),
-                (used / total, COLORS["ram"]),
-                (s / 100, HOT if s >= 90 else COLORS["u0"])]
+                (used / total, COLORS["ram"])]
 
-    def _tray_tip(self, d, rows):
+    @staticmethod
+    def _tray_tip(d):
         used, total = d["ram"]
         deg = lambda t: " %.0f°" % t if t else ""
         hw = "CPU %.0f%%%s · GPU %.0f%%%s · RAM %.0f%%" % (
             d["cpu"], deg(d["cpu_t"]), d["gpu"], deg(d["gpu_t"]),
             100 * used / total)
-        if rows:
-            claude = " · ".join("%s %.0f%%" % (label, pct)
-                                for _k, label, pct, _r in rows)
-        else:
-            claude = "Claude: %s" % (self.claude_err or "…")
-        t = self.today
-        today = "today %s calls · %s tok" % (core.fmt_count(t.get("calls", 0)),
-                                             core.fmt_count(t.get("out", 0)))
-        lines = ["minimon", hw, claude, today]
-        extra = sum(len(s) for s in lines) + 3 - 127   # szTip holds 127 chars
-        if extra > 0:
-            lines[2] = claude[:max(0, len(claude) - extra - 1)] + "…"
-        return "\n".join(lines)[:127]
+        return ("minimon\n" + hw)[:127]           # szTip holds 127 chars
 
     # --- taskbar readout ---
-    @staticmethod
-    def _quota_tags(rows):
-        """S  9% W 37% F 38% - the GNOME extension's one-letter Claude summary,
-        each percent right-aligned in 3 so the readout keeps a constant width."""
-        out = []
-        for key, _label, pct, _r in rows:
-            if key.startswith("session") or key == "five_hour":
-                tag = "S"
-            elif key in ("weekly_all", "seven_day"):
-                tag = "W"
-            elif ":" in key and key.startswith("weekly"):
-                tag = key.split(":", 1)[1][:1].upper()
-            elif key.startswith("seven_day_"):
-                tag = key[10:11].upper()
-            else:
-                continue
-            out.append("%s%3.0f%%" % (tag, pct))
-        return " ".join(out) or "CC --"
-
-    def _label_text(self, d, rows):
-        """The GNOME top-bar label, stacked as two lines (hardware over
-        Claude) because the taskbar is twice as tall as the GNOME bar and
-        its clock is two lines too; one --format template per line.
+    def _label_text(self, d):
+        """The GNOME top-bar label; one --format template per line, so it
+        can be stacked like the two-line clock beside it.
 
         Every number is right-aligned in a fixed field - percentages in 3
         (they reach 100), temperatures in 2 - so that in the monospace font
@@ -1229,13 +1155,10 @@ class Card:
         used, total = d["ram"]
         deg = lambda t: "%2.0f" % t if t else "--"
         if self.args.format:
-            s = self._session_pct(rows)
             values = dict(
                 cpu="%3.0f" % d["cpu"], ct=deg(d["cpu_t"]),
                 gpu="%3.0f" % d["gpu"], gt=deg(d["gpu_t"]),
-                mem="%3.0f" % (100 * used / total), mt=deg(d.get("ram_t")),
-                cc="--" if s is None else "%3.0f" % s,
-                claude=self._quota_tags(rows))
+                mem="%3.0f" % (100 * used / total), mt=deg(d.get("ram_t")))
             lines = []
             for fmt in self.args.format:
                 try:
@@ -1243,12 +1166,11 @@ class Card:
                 except (KeyError, IndexError, ValueError):
                     lines.append(fmt)          # show the bad template as-is
             return "\n".join(lines)
-        return "C%3.0f%% %s° · G%3.0f%%%s · M%3.0f%%%s\n%s" % (
+        return "C%3.0f%% %s° · G%3.0f%%%s · M%3.0f%%%s" % (
             d["cpu"], deg(d["cpu_t"]), d["gpu"],
             " %2.0f°" % d["gpu_t"] if d["gpu_t"] else "",
             100 * used / total,
-            " %2.0f°" % d["ram_t"] if d.get("ram_t") else "",
-            self._quota_tags(rows))
+            " %2.0f°" % d["ram_t"] if d.get("ram_t") else "")
 
     # --- drawing ---
     def _rround(self, x0, y0, x1, y1, r, **kw):
@@ -1281,16 +1203,15 @@ class Card:
         now = time.monotonic()
         dt, self._last = now - self._last, now
         d = self.sensors.read_all(max(dt, 0.05))
-        rows = list(self.claude_rows)
         if self.tray:
-            self.tray.update(self._tray_bars(d, rows), self._tray_tip(d, rows))
+            self.tray.update(self._tray_bars(d), self._tray_tip(d))
         if self.label:
-            self.label.update(self._label_text(d, rows))
+            self.label.update(self._label_text(d))
         if not self.hidden:
-            self._draw(d, rows)
+            self._draw(d)
         self.root.after(int(self.args.interval * 1000), self.tick)
 
-    def _draw(self, d, rows):
+    def _draw(self, d):
         c = self.canvas
         c.delete("all")
 
@@ -1300,6 +1221,10 @@ class Card:
         c.create_text(self.W - PAD, y - 2, text="✕", anchor="ne", fill=DIM,
                       font=self.sans, tags="close")
         c.tag_bind("close", "<Button-1>", lambda *_: self.close())
+        if d.get("lhm") == "none" and not d["cpu_t"]:
+            c.create_text(self.W - PAD - self.sans.measure("✕") - 8, y,
+                          text="no LHM", anchor="ne", fill=DIM,
+                          font=self.small)
         y += self.th + 8
 
         used, total = d["ram"]
@@ -1329,28 +1254,6 @@ class Card:
         c.create_text(PAD, y, anchor="nw", fill=DIM, font=self.mono,
                       text="↓ %s/s  ↑ %s/s" % (core.rate(d["net"][0]).strip(),
                                                core.rate(d["net"][1]).strip()))
-        y += self.mh + 8
-
-        c.create_line(PAD, y, self.W - PAD, y, fill="#2c2d36")
-        y += 8
-        c.create_text(PAD, y, text="CLAUDE CODE", anchor="nw", fill=DIM,
-                      font=self.tiny)
-        status = self.claude_err or ("no LHM" if d.get("lhm") == "none"
-                                     and not d["cpu_t"] else "")
-        c.create_text(self.W - PAD, y, text=status, anchor="ne", fill=DIM,
-                      font=self.small)
-        y += self.th + 8
-        if rows:
-            fills = [COLORS["u0"], COLORS["u1"], COLORS["u2"]]
-            for i, (_k, label, pct, resets) in enumerate(rows):
-                y = self._meter(y, label, short_reset(resets), pct,
-                                "%3.0f%%" % pct, pct / 100,
-                                fills[min(i, 2)])
-        t = self.today
-        c.create_text(PAD, y, anchor="nw", fill=DIM, font=self.mono,
-                      text="today  %s calls · %s tok" % (
-                          core.fmt_count(t.get("calls", 0)),
-                          core.fmt_count(t.get("out", 0))))
         y += self.mh + 10
 
         c.config(height=y)
@@ -1379,9 +1282,9 @@ def main():
                         "too crowded on the right")
     p.add_argument("--format", nargs="+", default=None, metavar="LINE",
                    help="taskbar readout, one template per line, with {cpu} "
-                        "{ct} {gpu} {gt} {mem} {mt} {cc} {claude} tokens "
-                        "(default: the GNOME top-bar label as two lines, "
-                        "C4%% 55° · G2%% 45° · M48%% over S9%% W37%% F38%%)")
+                        "{ct} {gpu} {gt} {mem} {mt} tokens "
+                        "(default: the GNOME top-bar label, "
+                        "C4%% 55° · G2%% 45° · M48%%)")
     args = p.parse_args()
 
     if IS_WIN:
