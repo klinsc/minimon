@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """minimon - an NZXT CAM "mini mode" style always-on-top hardware monitor for Linux.
 
-Pure GTK3 + /proc + /sys. No root, no external deps beyond PyGObject.
+Pure GTK3 + /proc + /sys, plus NVIDIA's own NVML library for NVIDIA GPUs.
+No root, no external deps beyond PyGObject.
 Left-drag to move, right-click for the menu, position is remembered.
 """
 import argparse
+import ctypes
 import glob
 import json
 import os
@@ -60,11 +62,53 @@ menuitem:hover { background-color: #7c5cff; }
 
 
 def read(path, cast=str, default=None):
+    if not path:                # a sensor this machine does not have
+        return default
     try:
         with open(path) as fh:
             return cast(fh.read().strip())
     except (OSError, ValueError):
         return default
+
+
+class NvidiaGPU:
+    """Load, temperature, power and VRAM of the first NVIDIA GPU.
+
+    NVIDIA's driver exposes none of the sysfs/hwmon files the AMD and Intel
+    drivers do, so this asks NVML - the libnvidia-ml the driver installs,
+    the same library nvidia-smi uses - through ctypes: no extra package and
+    no nvidia-smi process per tick. A call that fails just leaves its
+    reading empty."""
+
+    class _Util(ctypes.Structure):
+        _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
+
+    class _Mem(ctypes.Structure):
+        _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong),
+                    ("used", ctypes.c_ulonglong)]
+
+    def __init__(self):
+        self.nvml = ctypes.CDLL("libnvidia-ml.so.1")    # OSError if no driver
+        self.dev = ctypes.c_void_p()
+        if (self.nvml.nvmlInit_v2() != 0 or self.nvml.nvmlDeviceGetHandleByIndex_v2(
+                0, ctypes.byref(self.dev)) != 0):
+            raise OSError("NVML found no NVIDIA GPU")
+
+    def read(self):
+        n, dev = self.nvml, self.dev
+        util, mem = self._Util(), self._Mem()
+        temp, mw = ctypes.c_uint(), ctypes.c_uint()
+        ok = lambda rc: rc == 0     # noqa: E731
+        return {
+            "gpu": float(util.gpu) if ok(n.nvmlDeviceGetUtilizationRates(
+                dev, ctypes.byref(util))) else 0.0,
+            "gpu_t": float(temp.value) if ok(n.nvmlDeviceGetTemperature(
+                dev, 0, ctypes.byref(temp))) else None,    # 0 = GPU core
+            "gpu_w": mw.value / 1000.0 if ok(n.nvmlDeviceGetPowerUsage(
+                dev, ctypes.byref(mw))) else None,         # milliwatts
+            "vram": (mem.used / 1048576.0, mem.total / 1048576.0)
+            if ok(n.nvmlDeviceGetMemoryInfo(dev, ctypes.byref(mem))) else None,
+        }
 
 
 class Sensors:
@@ -89,6 +133,12 @@ class Sensors:
         dev = os.path.dirname(self.gpu_busy) if self.gpu_busy else None
         self.vram_used = os.path.join(dev, "mem_info_vram_used") if dev else None
         self.vram_total = os.path.join(dev, "mem_info_vram_total") if dev else None
+        self.nvidia = None
+        if not self.gpu_busy:
+            try:
+                self.nvidia = NvidiaGPU()
+            except (OSError, AttributeError):    # no driver, or one too old
+                pass
         self.disk_temp = self._temp(("nvme", "drivetemp"), ("Composite",))
         self.ram_temp = self._temp(("spd5118", "jc42"), ())
         self.freqs = glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq")
@@ -169,7 +219,7 @@ class Sensors:
         vu, vt = read(self.vram_used, int), read(self.vram_total, int)
         rx, tx = self.net(dt)
         pwr = read(self.gpu_power, int)
-        return {
+        d = {
             "cpu": self.cpu_percent(),
             "cpu_t": self._milli(self.cpu_temp),
             "ghz": self.cpu_ghz(),
@@ -182,6 +232,9 @@ class Sensors:
             "disk_t": self._milli(self.disk_temp),
             "net": (rx, tx),
         }
+        if self.nvidia:
+            d.update(self.nvidia.read())
+        return d
 
 
 class Row:
