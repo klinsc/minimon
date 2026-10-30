@@ -129,7 +129,8 @@ the Ayatana AppIndicator typelib. Sensors are read straight from `/proc` and
 `/sys/class/hwmon`, so no sensor daemon or extra package is required — the
 temperatures you see depend only on which kernel hwmon drivers are loaded
 (`k10temp`, `amdgpu`, `coretemp`, `nvme`, …), which is automatic on a normal
-install.
+install. NVIDIA GPUs have no such sysfs files; minimon reads them through NVML
+(`libnvidia-ml`), which the NVIDIA driver installs.
 
 - **Debian / Ubuntu:**
 
@@ -266,8 +267,9 @@ hardware:
 |---|---|
 | CPU load / freq | `/proc/stat`, `cpufreq/scaling_cur_freq` |
 | CPU temp | `k10temp` (Tctl) — falls back to `zenpower`, `coretemp`, `acpitz` |
-| GPU load | `/sys/class/drm/card*/device/gpu_busy_percent` |
+| GPU load | `/sys/class/drm/card*/device/gpu_busy_percent` (AMD) |
 | GPU temp / power / VRAM | `amdgpu` hwmon + drm sysfs |
+| NVIDIA GPU load / temp / power / VRAM | NVML (`libnvidia-ml.so.1`, installed with the driver) via ctypes |
 | RAM | `/proc/meminfo` (MemTotal − MemAvailable) |
 | SSD temp | `nvme` hwmon (Composite) |
 | RAM temp | `spd5118` / `jc42` hwmon when the DIMMs have sensors (typical DDR4 does not) |
