@@ -19,6 +19,7 @@ Same readout on both systems:
 Jump to: [Install on Windows 11](#install-on-windows-11) ·
 [Install on Linux](#install-on-linux) · [Controls](#controls) ·
 [Options](#command-line-options) ·
+[Temperature history](#temperature-history-linux) ·
 [Where the numbers come from](#where-the-numbers-come-from)
 
 ---
@@ -155,7 +156,8 @@ sensor plumbing.
 live label in the top bar; clicking it opens a popup that reproduces the
 floating card in full. `minimon-daemon.py` (autostarted) does the reading and
 writes `~/.cache/minimon/status.json` once a second; the extension is a pure
-renderer.
+renderer. The daemon also keeps the
+[temperature history](#temperature-history-linux).
 
 ```
 cp -r extension/minimon@klinsc.github ~/.local/share/gnome-shell/extensions/
@@ -248,6 +250,75 @@ Card position is stored in `~/.config/minimon.json` (Linux) /
 
 The AppIndicator bar (`minimon-bar.py`) takes `--interval` and `--format`
 (tokens `{cpu} {ct} {gpu} {gt} {mem}`).
+
+The daemon (`minimon-daemon.py`) takes `--no-log` to turn off the
+[temperature history](#temperature-history-linux).
+
+---
+
+## Temperature history (Linux)
+
+`minimon-daemon.py` also keeps a log of how hot the machine runs, so you can
+tell whether it is fine for long hours of use. Once a minute it writes the
+average and the peak of each temperature (CPU, GPU, SSD, and RAM when the
+DIMMs have a sensor) and the average CPU and GPU load to
+`~/.local/share/minimon/temps-YYYY-MM.csv`. That is one file a month, about
+3 MB. Files older than 13 months are deleted. The CSV opens in any spreadsheet
+if you want graphs.
+
+The floating card and the AppIndicator bar don't log. If you use one of those,
+autostart the daemon too (see [Autostart on Linux](#autostart-on-linux)): it
+has no window and costs next to nothing. After updating minimon, restart the
+daemon so it starts logging:
+
+```
+pkill -f minimon-daemon.py; python3 /path/to/minimon/minimon-daemon.py &
+```
+
+To see how it has been going:
+
+```
+python3 minimon_history.py              # the last 7 days
+python3 minimon_history.py --days 30
+```
+
+```
+Temperatures over the last 7 days: 112.0 h logged, 2026-11-04 17:19 to 2026-11-11 17:19
+
+part    avg   idle   busy   peak     warm      hot   verdict
+CPU    56°C   48°C   84°C   88°C  15h 00m       0m   warm
+GPU    48°C   43°C   72°C   74°C       0m       0m   ok
+SSD    50°C      -      -   54°C       0m       0m   ok
+
+avg, idle, busy: average temperature overall, at under 20% load, and at 75%+ load
+peak: the hottest single reading
+warm, hot: total time the per-minute average was at or above: CPU 80/90°C, GPU 80/90°C, SSD 70/80°C
+
+CPU averaged 80°C or more for 15h 00m (13% of the time): within spec, but its cooling has little headroom left. That was under heavy load (97% average), so it is the cooler running at its limit.
+
+per day     hours    CPU avg/peak    GPU avg/peak    SSD avg/peak
+2026-11-09   16.0         58/88           48/74           50/54
+2026-11-10   16.0         58/88           48/74           50/54
+2026-11-11    9.3         60/88           43/44           50/54
+```
+
+How to read it:
+
+- **warm** and **hot** are the levels each part is judged by: CPU 80 / 90 °C,
+  GPU 80 / 90 °C, SSD 70 / 80 °C, RAM 65 / 80 °C. Warm is within spec, but the
+  cooling has little headroom left. Hot is close to where the part slows
+  itself down to protect itself (CPUs at about 95–100 °C, GPUs 90–95 °C,
+  NVMe SSDs 80–85 °C, DDR5 85 °C). The times are minutes whose average was at
+  or above that level, so a one-second spike doesn't count.
+- **verdict** is `ok`, `warm` (warm more than 10% of the time, or hot at all),
+  or `HOT` (hot more than 1% of the time, and at least 5 minutes). It needs an
+  hour of log first.
+- **idle** and **busy** tell hard work apart from bad cooling. Running hot only
+  when busy means the cooler is at its limit. Running hot at light load points
+  at the cooling itself: dust, a slow or failed fan, dried thermal paste, poor
+  airflow. The report says which it was.
+- **per day**: daily averages that creep up over weeks of similar use are the
+  usual sign of dust building up.
 
 ---
 
