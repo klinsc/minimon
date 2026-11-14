@@ -294,7 +294,7 @@ avg, idle, busy: average temperature overall, at under 20% load, and at 75%+ loa
 peak: the hottest single reading
 warm, hot: total time the per-minute average was at or above: CPU 80/90°C, GPU 80/90°C, SSD 70/80°C
 
-CPU averaged 80°C or more for 15h 00m (13% of the time): within spec, but its cooling has little headroom left. That was under heavy load (97% average), so it is the cooler running at its limit.
+CPU averaged 80°C or more for 15h 00m (13% of the time): within spec, but its cooling has little headroom left. Little of it was at rest: during those minutes the CPU averaged 97% load and the GPU 3%.
 
 per day     hours    CPU avg/peak    GPU avg/peak    SSD avg/peak
 2026-11-09   16.0         58/88           48/74           50/54
@@ -313,10 +313,17 @@ How to read it:
 - **verdict** is `ok`, `warm` (warm more than 10% of the time, or hot at all),
   or `HOT` (hot more than 1% of the time, and at least 5 minutes). It needs an
   hour of log first.
-- **idle** and **busy** tell hard work apart from bad cooling. Running hot only
-  when busy means the cooler is at its limit. Running hot at light load points
-  at the cooling itself: dust, a slow or failed fan, dried thermal paste, poor
-  airflow. The report says which it was.
+- **idle**, **busy** and the note under the table tell hard work apart from
+  bad cooling. For every warm minute the report checks how busy the CPU and
+  the GPU were:
+  - **Warm with both at rest** (under 10% load) points at the cooling itself:
+    dust, a slow or failed fan, dried thermal paste, poor airflow. For the SSD
+    it may also be the drive's own copying, which the log doesn't record.
+  - **Warm while the GPU is busy** usually means the GPU's heat is warming the
+    air inside the case, which every other part breathes. More case airflow
+    helps most.
+  - **Light work is not rest.** Modern CPUs boost a few cores as hard as they
+    can, so on a Ryzen even 20% load runs about as hot as 100%.
 - **per day**: daily averages that creep up over weeks of similar use are the
   usual sign of dust building up.
 
