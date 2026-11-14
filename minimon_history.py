@@ -51,6 +51,11 @@ PARTS = (  # label, temperature column, load column, warm, hot
     ("RAM", "ram_temp", None, 65, 80),
 )
 IDLE, BUSY = 20, 75    # load %, for the "idle" and "busy" averages
+# Load %: with both the CPU and the GPU under this, the machine is at rest.
+# Only heat at rest says the cooling itself is failing. Moderate load is not
+# enough: on a Ryzen one or two boosting cores run about as hot as all of
+# them, and a busy GPU warms the air every other part in the case breathes.
+REST = 10
 
 
 class History:
@@ -147,7 +152,8 @@ def load_rows(log_dir, since):
 
 
 def summarize(rows, col, load_col, warm, hot):
-    temps, peaks, idle, busy, warm_loads = [], [], [], [], []
+    temps, peaks, idle, busy, warm_cpu, warm_gpu = [], [], [], [], [], []
+    warm_known = warm_rest = 0      # warm minutes with load data / at rest
     for r in rows:
         t = num(r, col)
         if t is None:
@@ -161,8 +167,16 @@ def summarize(rows, col, load_col, warm, hot):
                 idle.append(t)
             elif ld >= BUSY:
                 busy.append(t)
-            if t >= warm:
-                warm_loads.append(ld)
+        if t >= warm:
+            cpu, gpu = num(r, "cpu_load"), num(r, "gpu_load")
+            loads = [x for x in (cpu, gpu) if x is not None]
+            if loads:
+                warm_known += 1
+                warm_rest += all(x < REST for x in loads)
+            if cpu is not None:
+                warm_cpu.append(cpu)
+            if gpu is not None:
+                warm_gpu.append(gpu)
     if not temps:
         return None
     n = len(temps)
@@ -178,7 +192,9 @@ def summarize(rows, col, load_col, warm, hot):
         verdict = "ok"
     return {"n": n, "avg": mean(temps), "idle": mean(idle), "busy": mean(busy),
             "peak": max(peaks), "warm": warm_n, "hot": hot_n,
-            "warm_load": mean(warm_loads), "verdict": verdict}
+            "warm_known": warm_known, "warm_rest": warm_rest,
+            "warm_cpu": mean(warm_cpu), "warm_gpu": mean(warm_gpu),
+            "verdict": verdict}
 
 
 def deg(v, width=5):
@@ -201,17 +217,36 @@ def note(label, s, warm, hot):
                 % (label, warm, dur(s["warm"]), 100.0 * s["warm"] / s["n"]))
     else:
         return None
-    if s["warm_load"] is not None:
-        if s["warm_load"] < 50:
-            text += (" It ran that hot at only %.0f%% average load, which "
-                     "points at the cooling (dust, a slow or failed fan, dried "
-                     "thermal paste, airflow) rather than at hard work."
-                     % s["warm_load"])
-        else:
-            text += (" That was under heavy load (%.0f%% average), so it is "
-                     "the cooler running at its limit." % s["warm_load"])
-    elif s["verdict"] == "HOT":
-        text += " Give it more airflow or a heatsink."
+    if not s["warm_known"]:
+        if s["verdict"] == "HOT":
+            text += " Give it more airflow or a heatsink."
+        return text
+    if s["warm_rest"] >= max(10, 0.25 * s["warm_known"]):
+        text += (" %s of that was with the CPU and GPU at rest (both under "
+                 "%d%% load)." % (dur(s["warm_rest"]), REST))
+        if label in ("CPU", "GPU"):
+            return text + (" Nothing should run that hot at rest, so this "
+                           "points at the cooling: dust, a slow or failed fan, "
+                           "dried thermal paste, poor airflow.")
+        if label == "SSD":     # its own reads and writes are not logged
+            return text + (" Unless the drive itself was busy then (big "
+                           "copies, downloads, backups), this points at its "
+                           "cooling: give it a heatsink or more airflow.")
+        return text + " That points at its cooling: give it more airflow."
+    loads = [(name, s[key]) for name, key in (("CPU", "warm_cpu"),
+                                              ("GPU", "warm_gpu"))
+             if s[key] is not None]
+    text += (" Little of it was at rest: during those minutes the %s averaged "
+             "%.0f%% load" % loads[0]
+             + "".join(" and the %s %.0f%%" % x for x in loads[1:]) + ".")
+    if label != "GPU" and (s["warm_gpu"] or 0) >= 50:
+        return text + (" The GPU's heat warms the air inside the case, so more "
+                       "case airflow would help most.")
+    if label == "CPU" and (s["warm_cpu"] or 0) < 50:
+        text += (" Modern CPUs boost a few cores as hard as they can, so even "
+                 "light work runs them nearly as hot as full load.")
+    if s["verdict"] == "HOT":
+        text += " Better cooling would give it more room."
     return text
 
 
